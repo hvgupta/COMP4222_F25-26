@@ -73,7 +73,7 @@ if __name__ == "__main__":
 
         except Exception as e:
             logger.error(f"Error processing {unseen_symbol}: {e}")
-            break
+            continue
 
     exisiting_information.sort_values(by=["Date", "Symbol"], inplace=True)
     exisiting_information.to_csv("./one_year_company_info.csv", index=False)
