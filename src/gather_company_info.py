@@ -1,46 +1,71 @@
-from .market_data_fetcher import get_historical_eods_for_ticker, get_company_financial_metrics
+from market_data_fetcher import (
+    get_historical_eods_for_ticker,
+    # get_company_financial_metrics,
+)
 
+import pdb
 import os
 import pandas as pd
 from datetime import datetime
+from pathlib import Path
 
-if __name__  == "__main__":
-    old_information = pd.read_csv("./sp500_companies.csv")
+columns = ["Date", "Symbol", "Open", "High", "Low", "Close", "Volume"]
+current_dir = Path(__file__).resolve().parent
+file_path = current_dir / "sp500_companies.csv"
+save_path = current_dir / "one_year_company_info.csv"
+
+
+def create_stock_price_dataframe(api_response: dict) -> pd.DataFrame:
+    cur_info = []
+    cur_symbol = api_response["symbol"]
+
+    for daily_data in api_response["results"]:
+        cur_date = datetime.fromtimestamp(daily_data["t"]/1000).strftime("%Y-%m-%d")
+        cur_info.append(
+            {
+                "Date": cur_date,
+                "Symbol": cur_symbol,
+                "Open": daily_data["o"],
+                "High": daily_data["h"],
+                "Low": daily_data["l"],
+                "Close": daily_data["c"],
+                "Volume": daily_data["v"],
+            }
+        )
+
+    return pd.DataFrame(columns=columns, data=cur_info)
+
+
+if __name__ == "__main__":
+    # pdb.set_trace()
+    old_information = pd.read_csv(file_path)
     all_companies = set(old_information["Symbol"].tolist())
-    
-    exisiting_information = pd.DataFrame()
-    if os.path.exists("./one_year_company_info.csv"):
-        exisiting_information = pd.read_csv("./one_year_company_info.csv")
+
+    exisiting_information = pd.DataFrame(columns=columns)
+    exisiting_companies_list = set()
+    if os.path.exists(save_path):
+        exisiting_information = pd.read_csv(save_path)
         exisiting_companies_list = set(exisiting_information["Symbol"].tolist())
-    
-    for unseen_symbol in (all_companies - exisiting_companies_list):
+
+    for unseen_symbol in all_companies - exisiting_companies_list:
         try:
 
             historical_data = get_historical_eods_for_ticker(
-                unseen_symbol,
-                datetime(2024, 10, 1),
-                datetime(2025, 10, 1)
+                unseen_symbol, datetime(2024, 10, 1), datetime(2025, 10, 1)
             )
-            financial_metrics = get_company_financial_metrics(
-                unseen_symbol
-            )
-            if len(historical_data) == 0 or len(financial_metrics) == 0:
+            if len(historical_data) == 0:
                 print(f"Skipping {unseen_symbol} due to lack of data")
                 continue
-            
-            latest_close_price = historical_data[-1]["close"]
-            latest_financials = financial_metrics[0]
-            revenue = latest_financials.get("revenue", None)
-            net_income = latest_financials.get("netIncome", None)
-            
-            new_row = pd.DataFrame([{
-                "Symbol": unseen_symbol,
-                "Latest Close Price": latest_close_price,
-                "Revenue": revenue,
-                "Net Income": net_income
-            }])
-            exisiting_information = pd.concat([exisiting_information, new_row], ignore_index=True)
-            exisiting_information.to_csv("./one_year_company_info.csv", index=False)
-            print(f"Added data for {unseen_symbol}")
+
+            cur_df = create_stock_price_dataframe(historical_data)
+            exisiting_information = pd.concat(
+                [exisiting_information, cur_df], ignore_index=True
+            )
+
         except Exception as e:
             print(f"Error processing {unseen_symbol}: {e}")
+            break
+
+    exisiting_information.sort_values(by=["Date", "Symbol"], inplace=True)
+    exisiting_information.to_csv("./one_year_company_info.csv", index=False)
+    print(f"Added data for {unseen_symbol}")
