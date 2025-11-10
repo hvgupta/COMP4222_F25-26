@@ -1,4 +1,4 @@
-from logger import logger
+from .logger import logger
 
 import pandas as pd
 from pandas import Timestamp
@@ -36,19 +36,25 @@ def get_start_and_end_of_quarter(year: int, quarter: int):
 
 def _get_sum_of_prev_quarters(y_q_to_eps_map: dict, year: int):
     sum_prev = (
-        y_q_to_eps_map.get((year, "Q1"), 0)
-        + y_q_to_eps_map.get((year, "Q2"), 0)
-        + y_q_to_eps_map.get((year, "Q3"), 0)
+        y_q_to_eps_map.get((year, "Q1"), {}).get("eps", 0)
+        + y_q_to_eps_map.get((year, "Q2"), {}).get("eps", 0)
+        + y_q_to_eps_map.get((year, "Q3"), {}).get("eps", 0)
     )
     logger.debug(f"Sum of previous quarters for year {year}: {sum_prev}")
     return sum_prev
 
 
-def clean_eps_table(eps_table: pd.DataFrame):
+def clean_eps_table(eps_table: pd.DataFrame, start_year: int, end_year: int):
     logger.info(f"Starting to clean EPS table with {len(eps_table)} rows")
     filtered_eps = pd.DataFrame(columns=["start", "end", "eps", "fp"])
     y_q_to_eps_map = {}
     for i, row in eps_table.iterrows():
+        cur_year = row["end"].year
+        if cur_year < start_year or cur_year > end_year:
+            logger.debug(
+                f"Skipping row at index {i} with end year {row['end'].year} outside range {start_year}-{end_year}"
+            )
+            continue
         row_dict = {
             "start": row["start"],
             "end": row["end"],
