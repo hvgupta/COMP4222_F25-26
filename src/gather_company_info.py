@@ -1,80 +1,46 @@
 from logger import logger
 from market_data_fetcher import (
-    get_historical_eods_for_ticker,
-    # get_company_financial_metrics,
+    get_sp500_companies,
+    get_ticker_to_cik_map,
+    get_ticker_historical_prices,
+    extract_quarterly_data,
 )
 
-import os
 import pandas as pd
-from pathlib import Path
-from datetime import datetime
-
-columns = ["Date", "Symbol", "Open", "High", "Low", "Close", "Volume"]
-current_dir = Path(__file__).resolve().parent
-file_path = current_dir / "sp500_companies.csv"
-save_path = current_dir / "one_year_company_info.csv"
-
-ignore_list = set(["RVTY"])
 
 
-def create_stock_price_dataframe(api_response: dict) -> pd.DataFrame:
-    cur_info = []
-    cur_symbol = api_response["symbol"]
+def get_PE_ratio_data(ticker:str, ticker_price_data: pd.DataFrame, company_facts: dict):
+    eps_table = extract_quarterly_data(company_facts, "EarningsPerShareBasic", 'USD/shares')
+    if eps_table.empty:
+        logger.warning(f"No EPS data found for {ticker}")
+        return pd.DataFrame()
+    eps_table = eps_table.copy()
+    # ensure datetime types
+    
+    eps_table["start"] = pd.to_datetime(eps_table["start"], errors="coerce")
+    eps_table["end"] = pd.to_datetime(eps_table["end"], errors="coerce")
+    for col in ("start", "end"):
+        eps_table[col] = pd.to_datetime(eps_table[col], errors="coerce")
 
-    for daily_data in api_response["results"]:
-        logger.info(
-            f"Processing data for {cur_symbol} on {datetime.fromtimestamp(daily_data['t']/1000).strftime('%Y-%m-%d')}"
-        )
-        cur_date = datetime.fromtimestamp(daily_data["t"] / 1000).strftime("%Y-%m-%d")
-        cur_info.append(
-            {
-                "Date": cur_date,
-                "Symbol": cur_symbol,
-                "Open": daily_data["o"],
-                "High": daily_data["h"],
-                "Low": daily_data["l"],
-                "Close": daily_data["c"],
-                "Volume": daily_data["v"],
-            }
-        )
+    # drop rows missing crucial data
+    eps_table = eps_table.dropna(subset=["start", "end", "val"])
+    if eps_table.empty:
+        logger.warning(f"No valid EPS rows after cleaning for {ticker}")
+        return pd.DataFrame()
 
-    return pd.DataFrame(columns=columns, data=cur_info)
+    # for each end date, pick the row with the latest start date and extract its val
+    idx = eps_table.groupby("end")["start"].idxmax()
+    latest_per_end = eps_table.loc[idx].sort_values("end").reset_index(drop=True)
 
+    eps_df = latest_per_end[["end", "val"]].rename(columns={"val": "eps"})
+    logger.info(f"Extracted {len(eps_df)} EPS points for {ticker}")
+    
+    Stock_price = ticker_price_data.loc[eps_df["end"], "Close"].reset_index(drop=True)
+    eps_df["PE_ratio"] = Stock_price / eps_df["eps"]
+    eps_df["price"] = Stock_price
+    
+    return eps_df
 
-if __name__ == "__main__":
-    # pdb.set_trace()
-    old_information = pd.read_csv(file_path)
-    all_companies = set(old_information["Symbol"].tolist())
-
-    exisiting_information = pd.DataFrame(columns=columns)
-    exisiting_companies_list = set()
-    if os.path.exists(save_path):
-        exisiting_information = pd.read_csv(save_path)
-        exisiting_companies_list = set(exisiting_information["Symbol"].tolist())
-
-    for unseen_symbol in all_companies - exisiting_companies_list - ignore_list:
-        logger.info(f"Fetching data for unseen symbol: {unseen_symbol}")
-        try:
-            logger.info(f"Fetching historical data for {unseen_symbol}")
-            historical_data = get_historical_eods_for_ticker(
-                unseen_symbol, datetime(2024, 10, 1), datetime(2025, 10, 1)
-            )
-            logger.info(f"Fetched {len(historical_data.get('results', []))} records for {unseen_symbol}")
-            
-            if len(historical_data) == 0:
-                logger.warning(f"Skipping {unseen_symbol} due to lack of data")
-                continue
-
-            cur_df = create_stock_price_dataframe(historical_data)
-            exisiting_information = pd.concat(
-                [exisiting_information, cur_df], ignore_index=True
-            )
-            logger.info(f"Added data for {unseen_symbol}, total records now: {len(exisiting_information)}")
-
-        except Exception as e:
-            logger.error(f"Error processing {unseen_symbol}: {e}")
-            continue
-
-    exisiting_information.sort_values(by=["Date", "Symbol"], inplace=True)
-    exisiting_information.to_csv("./one_year_company_info.csv", index=False)
-    logger.info(f"Finished processing unseen symbols.")
+def get_PB_ratio_data(ticker:str, ticker_price_data: pd.DataFrame, company_facts: dict):
+    equity_table = extract_quarterly_data(company_facts, 'StockholdersEquity', 'USD')
+    shares_df = extract_quarterly_data(company_facts, 'CommonStockSharesOutstanding', 'shares')
