@@ -5,13 +5,47 @@ from .market_data_fetcher import (
     get_ticker_historical_prices,
     extract_quarterly_data,
 )
-from .helper_functions import clean_eps_table
+from .helper_functions import clean_eps_table, clean_instance_tables
 
 import pandas as pd
 
 
+def _price_align_and_compute_ratio(
+    price_data: pd.DataFrame, financial_data: pd.DataFrame, value_col: str, ratio_col: str
+):  
+    price_df = price_data.copy()
+    price_df.index = pd.to_datetime(price_df.index, errors="coerce")
+    price_series = price_df["Close"].sort_index()
+    
+    try:
+        aligned_prices = price_series.reindex(
+            financial_data["end"], method="ffill"
+        )
+    except Exception:
+        aligned_prices = price_series.reindex(financial_data["end"])
+    
+    if isinstance(aligned_prices, pd.DataFrame):
+        if not aligned_prices.empty:
+            aligned_prices = aligned_prices.iloc[:, 0]  # type: ignore
+        else:
+            aligned_prices = pd.Series(dtype=float, index=financial_data["end"])
+            
+    if aligned_prices.isna().any():
+        logger.warning(
+            f"Missing price data for some financial dates; {ratio_col} may contain NaN"
+        )
+        
+    financial_data["price"] = aligned_prices.values
+    financial_data[ratio_col] = financial_data["price"] / financial_data[value_col]
+    return financial_data
+
+
 def get_PE_ratio_data(
-    ticker: str, ticker_price_data: pd.DataFrame, company_facts: dict, start_year: int, end_year: int
+    ticker: str,
+    ticker_price_data: pd.DataFrame,
+    company_facts: dict,
+    start_year: int,
+    end_year: int,
 ):
     eps_table = extract_quarterly_data(
         company_facts, "EarningsPerShareBasic", "USD/shares"
@@ -28,37 +62,53 @@ def get_PE_ratio_data(
     eps_table = clean_eps_table(eps_table, start_year, end_year)
     logger.info(f"Extracted {len(eps_table)} EPS points for {ticker}")
 
-    # Ensure price index is datetime and sorted
-    price_df = ticker_price_data.copy()
-    price_df.index = pd.to_datetime(price_df.index, errors="coerce")
-    price_series = price_df["Close"].sort_index()
-
-    # Align prices to the EPS 'end' dates by taking the last available close on or before each end date
-    # using forward-fill on a reindex to the eps_table end dates.
-    try:
-        aligned_prices = price_series.reindex(eps_table["end"], method="ffill")
-    except Exception:
-        # fallback to simple reindex if method fails (e.g., incompatible indexes)
-        aligned_prices = price_series.reindex(eps_table["end"])
-
-    # Ensure aligned_prices is a Series (if DataFrame was returned, take the first column)
-    if isinstance(aligned_prices, pd.DataFrame):
-        if not aligned_prices.empty:
-            aligned_prices = aligned_prices.iloc[:, 0] # type: ignore
-        else:
-            aligned_prices = pd.Series(dtype=float, index=eps_table["end"])
-
-    # Now it's safe to use .isna().any() which returns a single boolean for a Series
-    if aligned_prices.isna().any():
-        logger.warning(f"Missing price data for some EPS dates for {ticker}; PE ratios may contain NaN")
-
-    # Assign aligned prices and compute PE ratio element-wise
-    eps_table["price"] = aligned_prices.values
-    eps_table["PE_ratio"] = eps_table["price"] / eps_table["eps"]
-
-    return eps_table
+    return _price_align_and_compute_ratio(
+        ticker_price_data, eps_table, value_col="eps", ratio_col="PE_ratio"
+    )
 
 
-# def get_PB_ratio_data(ticker:str, ticker_price_data: pd.DataFrame, company_facts: dict):
-#     equity_table = extract_quarterly_data(company_facts, 'StockholdersEquity', 'USD')
-#     shares_df = extract_quarterly_data(company_facts, 'CommonStockSharesOutstanding', 'shares')
+def get_PB_ratio_data(
+    ticker: str,
+    ticker_price_data: pd.DataFrame,
+    company_facts: dict,
+    start_year: int,
+    end_year: int,
+):
+    logger.info(f"Extracting PB ratio data for {ticker}")
+    equity_table = extract_quarterly_data(company_facts, "StockholdersEquity", "USD")
+    logger.info(f"Extracted {len(equity_table)} equity points for {ticker}")
+    
+    
+    shares_table = extract_quarterly_data(
+        company_facts, "CommonStockSharesOutstanding", "shares"
+    )
+    logger.info(f"Extracted {len(shares_table)} shares outstanding points for {ticker}")
+
+    standardised_equity = clean_instance_tables(
+        equity_table, start_year=start_year, end_year=end_year
+    )
+    logger.info(f"Standardised equity to {len(standardised_equity)} points for {ticker}")
+    
+    standardised_shares = clean_instance_tables(
+        shares_table, start_year=start_year, end_year=end_year
+    )
+    logger.info(f"Standardised shares to {len(standardised_shares)} points for {ticker}")
+    
+    equity_per_share_table = pd.merge_asof(
+        standardised_equity.sort_values("end"),
+        standardised_shares.sort_values("end"),
+        on="end",
+        direction="backward",
+        suffixes=("_equity", "_shares"),
+    )
+    equity_per_share_table["equity_per_share"] = (
+        equity_per_share_table["stockHolder_equity"] /
+        equity_per_share_table["CommonStockSharesOutstanding"]
+    )
+    
+    return _price_align_and_compute_ratio(
+        ticker_price_data,
+        equity_per_share_table,
+        value_col="equity_per_share",
+        ratio_col="PB_ratio",
+    )

@@ -1,6 +1,5 @@
-import ta
+import talib
 import pandas as pd
-import networkx as nx
 
 # ======= HYPER-PARAMETERS ======
 

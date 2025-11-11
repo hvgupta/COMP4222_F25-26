@@ -7,3 +7,4 @@ torch==2.9.0+cpu
 torch-geometric==2.7.0
 torch_scatter==2.1.2+pt24cpu
 torch_sparse==0.6.18+pt24cpu
+TA-Lib==0.6.8

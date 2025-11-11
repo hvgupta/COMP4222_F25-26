@@ -25,7 +25,8 @@ def get_ticker_to_cik_map() -> dict[str, str]:
     logger.info("Fetching ticker to CIK mapping from SEC")
 
     url = "https://www.sec.gov/files/company_tickers.json"
-    response = requests.get(url)
+    response = requests.get(url, headers=HEADERS)
+    response.raise_for_status()
     ticker_to_cik_map = {
         info["ticker"]: str(info["cik_str"]).zfill(10)
         for info in response.json().values()
