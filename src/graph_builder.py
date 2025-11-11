@@ -1,4 +1,3 @@
-import talib
 import pandas as pd
 
 # ======= HYPER-PARAMETERS ======

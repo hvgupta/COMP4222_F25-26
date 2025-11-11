@@ -1,7 +1,7 @@
 from .logger import logger
 from .market_data_fetcher import *
 
-import numpy as np
+import talib
 import pandas as pd
 
 
@@ -122,21 +122,20 @@ def get_PB_ratio_data(
         value_col="equity_per_share",
         ratio_col="PB_ratio",
     )
-    
+
+
 def get_roa_data(ticker: str, company_facts: dict, start_year: int, end_year: int):
-    logger.info(
-        f"Computing ROA for {ticker} from {start_year} to {end_year}"
-    )
+    logger.info(f"Computing ROA for {ticker} from {start_year} to {end_year}")
     net_df = extract_quarterly_data(company_facts, "NetIncomeLoss", "USD")
     assets_df = extract_quarterly_data(company_facts, "Assets", "USD")
-    
-    net_df["start"] = pd.to_datetime(net_df["start"], errors="coerce") # type: ignore
-    net_df["end"] = pd.to_datetime(net_df["end"], errors="coerce") # type: ignore
-    assets_df["end"] = pd.to_datetime(assets_df["end"], errors="coerce") # type: ignore
-    
+
+    net_df["start"] = pd.to_datetime(net_df["start"], errors="coerce")  # type: ignore
+    net_df["end"] = pd.to_datetime(net_df["end"], errors="coerce")  # type: ignore
+    assets_df["end"] = pd.to_datetime(assets_df["end"], errors="coerce")  # type: ignore
+
     cleaned_net_df = clean_period_table(net_df, start_year, end_year, "net_q")
     cleaned_assets_df = clean_instance_tables(assets_df, start_year, end_year, "assets")
-    
+
     combined_df = pd.merge_asof(
         cleaned_net_df.sort_values("end"),
         cleaned_assets_df.sort_values("end"),
@@ -145,7 +144,7 @@ def get_roa_data(ticker: str, company_facts: dict, start_year: int, end_year: in
         direction="backward",
         suffixes=("_net", "_assets"),
     )
-    
+
     combined_df["roa"] = combined_df["net_q"] / combined_df["assets"]
     logger.info(f"Computed ROA table with {len(combined_df)} rows for {ticker}")
     return combined_df
@@ -193,3 +192,78 @@ def get_current_ratio_data(
     )
     logger.info(f"Computed Current Ratio table with {len(merged_df)} rows for {ticker}")
     return merged_df
+
+
+def get_historical_price_features(ticker: str, ticker_price_data: pd.DataFrame):
+    logger.info(f"Computing historical price features for {ticker}")
+
+    price_df = ticker_price_data.copy()
+    price_features_df = pd.DataFrame(
+        columns=[
+            "date",
+            "PCT-1",
+            "PCT-5",
+            "PCT-10",
+            "PCT-15",
+            "PCT-20",
+            "MOM-5",
+            "MOM-10",
+            "MOM-15",
+            "MOM-20",
+            "NATR-5",
+            "NATR-10",
+            "NATR-15",
+            "NATR-20",
+        ]
+    )
+
+    close_numpy = price_df["Close"].to_numpy().reshape(-1)
+    high_numpy = price_df["High"].to_numpy().reshape(-1)
+    low_numpy = price_df["Low"].to_numpy().reshape(-1)
+
+    pct1 = talib.ROCP(close_numpy, timeperiod=1)
+    pct5 = talib.ROCP(close_numpy, timeperiod=5)
+    pct10 = talib.ROCP(close_numpy, timeperiod=10)
+    pct15 = talib.ROCP(close_numpy, timeperiod=15)
+    pct20 = talib.ROCP(close_numpy, timeperiod=20)
+
+    mom5 = talib.MOM(close_numpy, timeperiod=5)
+    mom10 = talib.MOM(close_numpy, timeperiod=10)
+    mom15 = talib.MOM(close_numpy, timeperiod=15)
+    mom20 = talib.MOM(close_numpy, timeperiod=20)
+
+    natr5 = talib.NATR(high_numpy, low_numpy, close_numpy, timeperiod=5)
+    natr10 = talib.NATR(high_numpy, low_numpy, close_numpy, timeperiod=10)
+    natr15 = talib.NATR(high_numpy, low_numpy, close_numpy, timeperiod=15)
+    natr20 = talib.NATR(high_numpy, low_numpy, close_numpy, timeperiod=20)
+
+    price_features_df["date"] = price_df.index
+
+    price_features_df["PCT-1"] = pct1
+    price_features_df["PCT-5"] = pct5
+    price_features_df["PCT-10"] = pct10
+    price_features_df["PCT-15"] = pct15
+    price_features_df["PCT-20"] = pct20
+
+    price_features_df["MOM-5"] = mom5
+    price_features_df["MOM-10"] = mom10
+    price_features_df["MOM-15"] = mom15
+    price_features_df["MOM-20"] = mom20
+
+    price_features_df["NATR-5"] = natr5
+    price_features_df["NATR-10"] = natr10
+    price_features_df["NATR-15"] = natr15
+    price_features_df["NATR-20"] = natr20
+
+    logger.info(f"Computed historical price features for {ticker}")
+
+    return price_features_df
+
+def get_one_hot_sector(ticker_sector: str, all_sectors: list[str]) -> pd.Series:
+    logger.info(f"Generating one-hot encoding for sector: {ticker_sector}")
+    one_hot_series = pd.Series(0, index=all_sectors)
+    if ticker_sector in all_sectors:
+        one_hot_series[ticker_sector] = 1
+    else:
+        logger.warning(f"Sector {ticker_sector} not found in all sectors list")
+    return one_hot_series
