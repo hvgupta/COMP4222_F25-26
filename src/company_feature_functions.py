@@ -267,3 +267,154 @@ def get_one_hot_sector(ticker_sector: str, all_sectors: list[str]) -> pd.Series:
     else:
         logger.warning(f"Sector {ticker_sector} not found in all sectors list")
     return one_hot_series
+
+
+def get_profit_margin_data(
+    ticker: str,
+    company_facts: dict,
+    start_year: int,
+    end_year: int,
+):
+    """
+    Compute profit margin per quarter using SEC facts.
+    Profit Margin = Net Income / Revenue
+    Returns DataFrame with columns: start, end, year, quarter, net_income, revenue, profit_margin
+    """
+    logger.info(f"Computing Profit Margin for {ticker} from {start_year} to {end_year}")
+    
+    net_df = extract_quarterly_data(company_facts, "NetIncomeLoss", "USD")
+    revenue_df = extract_quarterly_data(company_facts, "Revenues", "USD")
+    
+    if net_df.empty:
+        logger.warning(f"No NetIncomeLoss data for {ticker}")
+        return pd.DataFrame()
+    if revenue_df.empty:
+        logger.warning(f"No Revenues data for {ticker}")
+        return pd.DataFrame()
+    
+    # normalize datetimes
+    net_df["start"] = pd.to_datetime(net_df["start"], errors="coerce")  # type: ignore
+    net_df["end"] = pd.to_datetime(net_df["end"], errors="coerce")  # type: ignore
+    revenue_df["start"] = pd.to_datetime(revenue_df["start"], errors="coerce")  # type: ignore
+    revenue_df["end"] = pd.to_datetime(revenue_df["end"], errors="coerce")  # type: ignore
+    
+    # clean period tables (quarterly flow metrics)
+    cleaned_net = clean_period_table(net_df, start_year, end_year, "net_income")
+    cleaned_revenue = clean_period_table(revenue_df, start_year, end_year, "revenue")
+    
+    if cleaned_net.empty or cleaned_revenue.empty:
+        logger.warning(f"Cleaned tables are empty for {ticker}")
+        return pd.DataFrame()
+    
+    # merge on end date and fp
+    merged_df = pd.merge(
+        cleaned_net,
+        cleaned_revenue,
+        on=["end", "start", "fp"],
+        how="inner",
+        suffixes=("_net", "_rev")
+    )
+    
+    # compute profit margin
+    merged_df["profit_margin"] = merged_df["net_income"] / merged_df["revenue"].replace({0: pd.NA})
+    
+    merged_df["year"] = merged_df["end"].dt.year
+    merged_df["quarter"] = merged_df["fp"]
+    
+    logger.info(f"Computed Profit Margin table with {len(merged_df)} rows for {ticker}")
+    return merged_df
+
+
+def get_interest_coverage_ratio_data(
+    ticker: str,
+    company_facts: dict,
+    start_year: int,
+    end_year: int,
+):
+    """
+    Compute Interest Coverage Ratio per quarter using SEC facts.
+    Interest Coverage Ratio = EBIT / Interest Expense
+    Where EBIT = Operating Income (or Net Income + Interest Expense + Tax if not available)
+    
+    Returns DataFrame with columns: start, end, year, quarter, operating_income, interest_expense, interest_coverage_ratio
+    """
+    logger.info(f"Computing Interest Coverage Ratio for {ticker} from {start_year} to {end_year}")
+    
+    # Try to get OperatingIncomeLoss first (EBIT proxy)
+    operating_income_df = extract_quarterly_data(company_facts, "OperatingIncomeLoss", "USD")
+    interest_expense_df = extract_quarterly_data(company_facts, "InterestExpense", "USD")
+    
+    if operating_income_df.empty:
+        logger.warning(f"No OperatingIncomeLoss data for {ticker}, trying alternative calculation")
+        # Alternative: try to compute EBIT from net income + interest + tax
+        net_income_df = extract_quarterly_data(company_facts, "NetIncomeLoss", "USD")
+        tax_df = extract_quarterly_data(company_facts, "IncomeTaxExpenseBenefit", "USD")
+        
+        if net_income_df.empty or interest_expense_df.empty:
+            logger.warning(f"Insufficient data to compute Interest Coverage Ratio for {ticker}")
+            return pd.DataFrame()
+        
+        # Normalize and clean
+        net_income_df["start"] = pd.to_datetime(net_income_df["start"], errors="coerce")  # type: ignore
+        net_income_df["end"] = pd.to_datetime(net_income_df["end"], errors="coerce")  # type: ignore
+        interest_expense_df["start"] = pd.to_datetime(interest_expense_df["start"], errors="coerce")  # type: ignore
+        interest_expense_df["end"] = pd.to_datetime(interest_expense_df["end"], errors="coerce")  # type: ignore
+        
+        cleaned_net = clean_period_table(net_income_df, start_year, end_year, "net_income")
+        cleaned_interest = clean_period_table(interest_expense_df, start_year, end_year, "interest_expense")
+        
+        if not tax_df.empty:
+            tax_df["start"] = pd.to_datetime(tax_df["start"], errors="coerce")  # type: ignore
+            tax_df["end"] = pd.to_datetime(tax_df["end"], errors="coerce")  # type: ignore
+            cleaned_tax = clean_period_table(tax_df, start_year, end_year, "tax_expense")
+            
+            # Merge all three
+            merged_df = pd.merge(cleaned_net, cleaned_interest, on=["end", "start", "fp"], how="inner")
+            merged_df = pd.merge(merged_df, cleaned_tax, on=["end", "start", "fp"], how="left")
+            
+            # EBIT = Net Income + Interest + Tax
+            merged_df["operating_income"] = (
+                merged_df["net_income"] + 
+                merged_df["interest_expense"] + 
+                merged_df["tax_expense"].fillna(0)
+            )
+        else:
+            # Without tax data: EBIT ≈ Net Income + Interest
+            merged_df = pd.merge(cleaned_net, cleaned_interest, on=["end", "start", "fp"], how="inner")
+            merged_df["operating_income"] = merged_df["net_income"] + merged_df["interest_expense"]
+    
+    else:
+        # Use operating income directly
+        if interest_expense_df.empty:
+            logger.warning(f"No InterestExpense data for {ticker}")
+            return pd.DataFrame()
+        
+        operating_income_df["start"] = pd.to_datetime(operating_income_df["start"], errors="coerce")  # type: ignore
+        operating_income_df["end"] = pd.to_datetime(operating_income_df["end"], errors="coerce")  # type: ignore
+        interest_expense_df["start"] = pd.to_datetime(interest_expense_df["start"], errors="coerce")  # type: ignore
+        interest_expense_df["end"] = pd.to_datetime(interest_expense_df["end"], errors="coerce")  # type: ignore
+        
+        cleaned_operating = clean_period_table(operating_income_df, start_year, end_year, "operating_income")
+        cleaned_interest = clean_period_table(interest_expense_df, start_year, end_year, "interest_expense")
+        
+        if cleaned_operating.empty or cleaned_interest.empty:
+            logger.warning(f"Cleaned tables are empty for {ticker}")
+            return pd.DataFrame()
+        
+        merged_df = pd.merge(
+            cleaned_operating,
+            cleaned_interest,
+            on=["end", "start", "fp"],
+            how="inner"
+        )
+    
+    # Compute Interest Coverage Ratio
+    merged_df["interest_coverage_ratio"] = (
+        merged_df["operating_income"] / merged_df["interest_expense"].replace({0: pd.NA})
+    )
+    
+    merged_df["year"] = merged_df["end"].dt.year
+    merged_df["quarter"] = merged_df["fp"]
+    
+    logger.info(f"Computed Interest Coverage Ratio table with {len(merged_df)} rows for {ticker}")
+    return merged_df
