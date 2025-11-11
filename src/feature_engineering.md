@@ -14,8 +14,8 @@ The features going to be used in this example is going to be
   - the below for the previous quarter and annual
     - P/B ratio
     - P/E ratio
-    - EBITA
     - ROA
+    - Current Ratio
 
 - Some other information 
   - The Sector of the Company (could be 1 hot)

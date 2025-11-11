@@ -1,6 +1,7 @@
 from .logger import logger
 from .market_data_fetcher import *
 
+import numpy as np
 import pandas as pd
 
 
@@ -56,7 +57,7 @@ def get_PE_ratio_data(
     eps_table["start"] = pd.to_datetime(eps_table["start"], errors="coerce")
     eps_table["end"] = pd.to_datetime(eps_table["end"], errors="coerce")
 
-    eps_table = clean_eps_table(eps_table, start_year, end_year)
+    eps_table = clean_period_table(eps_table, start_year, end_year, "eps")
     logger.info(f"Extracted {len(eps_table)} EPS points for {ticker}")
 
     return _price_align_and_compute_ratio(
@@ -121,3 +122,74 @@ def get_PB_ratio_data(
         value_col="equity_per_share",
         ratio_col="PB_ratio",
     )
+    
+def get_roa_data(ticker: str, company_facts: dict, start_year: int, end_year: int):
+    logger.info(
+        f"Computing ROA for {ticker} from {start_year} to {end_year}"
+    )
+    net_df = extract_quarterly_data(company_facts, "NetIncomeLoss", "USD")
+    assets_df = extract_quarterly_data(company_facts, "Assets", "USD")
+    
+    net_df["start"] = pd.to_datetime(net_df["start"], errors="coerce") # type: ignore
+    net_df["end"] = pd.to_datetime(net_df["end"], errors="coerce") # type: ignore
+    assets_df["end"] = pd.to_datetime(assets_df["end"], errors="coerce") # type: ignore
+    
+    cleaned_net_df = clean_period_table(net_df, start_year, end_year, "net_q")
+    cleaned_assets_df = clean_instance_tables(assets_df, start_year, end_year, "assets")
+    
+    combined_df = pd.merge_asof(
+        cleaned_net_df.sort_values("end"),
+        cleaned_assets_df.sort_values("end"),
+        on="end",
+        by=["start", "fp"],
+        direction="backward",
+        suffixes=("_net", "_assets"),
+    )
+    
+    combined_df["roa"] = combined_df["net_q"] / combined_df["assets"]
+    logger.info(f"Computed ROA table with {len(combined_df)} rows for {ticker}")
+    return combined_df
+
+
+def get_current_ratio_data(
+    ticker: str,
+    company_facts: dict,
+    start_year: int,
+    end_year: int,
+):
+    logger.info(
+        f"Computing ROA and Current Ratio for {ticker} from {start_year} to {end_year}"
+    )
+
+    assets_current_df = extract_quarterly_data(company_facts, "AssetsCurrent", "USD")
+    liab_current_df = extract_quarterly_data(company_facts, "LiabilitiesCurrent", "USD")
+
+    assets_current_df["end"] = pd.to_datetime(assets_current_df["end"], errors="coerce")  # type: ignore
+    liab_current_df["end"] = pd.to_datetime(liab_current_df["end"], errors="coerce")  # type: ignore
+
+    cleaned_cur_assets = clean_instance_tables(
+        assets_current_df,
+        start_year=start_year,
+        end_year=end_year,
+        quantity_name="assets_current",
+    )
+    cleaned_liab_current = clean_instance_tables(
+        liab_current_df,
+        start_year=start_year,
+        end_year=end_year,
+        quantity_name="liabilities_current",
+    )
+
+    merged_df = pd.merge_asof(
+        cleaned_cur_assets.sort_values("end"),
+        cleaned_liab_current.sort_values("end"),
+        on="end",
+        by=["start", "fp"],
+        direction="backward",
+        suffixes=("_assets", "_liab"),
+    )
+    merged_df["current_ratio"] = (
+        merged_df["assets_current"] / merged_df["liabilities_current"]
+    )
+    logger.info(f"Computed Current Ratio table with {len(merged_df)} rows for {ticker}")
+    return merged_df
