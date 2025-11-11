@@ -95,10 +95,10 @@ def clean_eps_table(eps_table: pd.DataFrame, start_year: int, end_year: int):
     return filtered_eps
 
 
-def clean_instance_tables(instance_table: pd.DataFrame, start_year: int, end_year: int):
-    filtered_instance = pd.DataFrame(
-        columns=["start", "end", "stockHolder_equity", "fp"]
-    )
+def clean_instance_tables(
+    instance_table: pd.DataFrame, start_year: int, end_year: int, quantity_name: str
+):
+    filtered_instance = pd.DataFrame(columns=["start", "end", quantity_name, "fp"])
     y_q_to_equity_list = []
     for year in range(start_year, end_year + 1):
         for month in [3, 6, 9, 12]:
@@ -121,7 +121,7 @@ def clean_instance_tables(instance_table: pd.DataFrame, start_year: int, end_yea
                     {
                         "start": start,
                         "end": end,
-                        "stockHolder_equity": latest_row["val"],
+                        quantity_name: latest_row["val"],
                         "fp": "Q4",
                     }
                 )
@@ -129,7 +129,7 @@ def clean_instance_tables(instance_table: pd.DataFrame, start_year: int, end_yea
                     {
                         "start": Timestamp(year=year, month=1, day=1),
                         "end": end,
-                        "stockHolder_equity": latest_row["val"],
+                        quantity_name: latest_row["val"],
                         "fp": "FY",
                     }
                 )
@@ -138,7 +138,7 @@ def clean_instance_tables(instance_table: pd.DataFrame, start_year: int, end_yea
                     {
                         "start": start,
                         "end": end,
-                        "stockHolder_equity": latest_row["val"],
+                        quantity_name: latest_row["val"],
                         "fp": f"Q{current_quarter}",
                     }
                 )
@@ -154,10 +154,10 @@ def clean_instance_tables(instance_table: pd.DataFrame, start_year: int, end_yea
             start, end = get_start_and_end_of_quarter(
                 year, int(quarter[1]) if quarter[1].isdigit() else 0
             )
-            filtered_instance.loc[len(filtered_instance)] = { # type: ignore
+            filtered_instance.loc[len(filtered_instance)] = {  # type: ignore
                 "start": start,
                 "end": end,
-                "stockHolder_equity": None,
+                quantity_name: None,
                 "fp": quarter,
             }
 
@@ -166,9 +166,7 @@ def clean_instance_tables(instance_table: pd.DataFrame, start_year: int, end_yea
     )
     filtered_instance.reset_index(drop=True, inplace=True)
 
-    filtered_instance["stockHolder_equity"] = filtered_instance[
-        "stockHolder_equity"
-    ].bfill()
+    filtered_instance[quantity_name] = filtered_instance[quantity_name].bfill()
     filtered_instance.dropna(inplace=True)
 
     return filtered_instance

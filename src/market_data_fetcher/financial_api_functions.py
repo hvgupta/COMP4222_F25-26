@@ -53,6 +53,11 @@ def get_ticker_historical_prices(ticker_symbol: str, start_date: str, end_date: 
     data = yf.download(ticker_symbol, start=start_date, end=end_date)
 
     logger.info(f"Successfully fetched historical prices for {ticker_symbol}")
+    
+    if data is None or data.empty:
+        logger.warning(f"No historical price data found for {ticker_symbol}")
+        raise ValueError(f"No historical price data found for {ticker_symbol}")
+    
     return data
 
 
