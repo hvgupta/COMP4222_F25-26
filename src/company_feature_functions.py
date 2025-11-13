@@ -62,16 +62,16 @@ def get_PE_ratio_data(
     eps_table = clean_period_table(eps_table, start_year, end_year, "eps")
     logger.info(f"Extracted {len(eps_table)} EPS points for {ticker}")
 
-    eps_table["prev_eps"] = eps_table["eps"].shift(1)
+    eps_table["trailing_eps"] = eps_table["eps"].shift(1)
     eps_table["trailing_one_year_eps"] = (
-        eps_table["prev_eps"].rolling(window=4, min_periods=1).sum()
+        eps_table["trailing_eps"].rolling(window=4, min_periods=1).sum()
     )
 
     return _price_align_and_compute_ratio(
         ticker_price_data,
         eps_table,
-        value_cols=["eps", "prev_eps", "trailing_one_year_eps"],
-        ratio_cols=["PE_ratio", "prev_PE_ratio", "trailing_one_year_PE_ratio"],
+        value_cols=["eps", "trailing_eps", "trailing_one_year_eps"],
+        ratio_cols=["PE_ratio", "trailing_PE_ratio", "trailing_one_year_PE_ratio"],
     )
 
 
@@ -112,7 +112,7 @@ def get_PB_ratio_data(
         f"Standardised shares to {len(standardised_shares)} points for {ticker}"
     )
 
-    equity_per_share_table = pd.merge_asof(
+    eqps_table = pd.merge_asof(
         standardised_equity.sort_values("end"),
         standardised_shares.sort_values("end"),
         on="end",
@@ -121,31 +121,24 @@ def get_PB_ratio_data(
         suffixes=("_equity", "_shares"),
     )
 
-    equity_per_share_table["equity_per_share"] = (
-        equity_per_share_table["stockHolder_equity"]
-        / equity_per_share_table["shareQuantity"]
-    )
+    eqps_table["eqps"] = eqps_table["stockHolder_equity"] / eqps_table["shareQuantity"]
 
-    equity_per_share_table["prev_equity_per_share"] = equity_per_share_table[
-        "equity_per_share"
-    ].shift(1)
-    equity_per_share_table["trailing_one_year_equity_per_share"] = (
-        equity_per_share_table["prev_equity_per_share"]
-        .rolling(window=4, min_periods=1)
-        .mean()
+    eqps_table["trailing_eqps"] = eqps_table["eqps"].shift(1)
+    eqps_table["trailing_one_year_eqps"] = (
+        eqps_table["trailing_eqps"].rolling(window=4, min_periods=1).mean()
     )
 
     logger.info(f"Computed equity per share for {ticker}")
 
     return _price_align_and_compute_ratio(
         ticker_price_data,
-        equity_per_share_table,
+        eqps_table,
         value_cols=[
-            "equity_per_share",
-            "prev_equity_per_share",
-            "trailing_one_year_equity_per_share",
+            "eqps",
+            "trailing_eqps",
+            "trailing_one_year_eqps",
         ],
-        ratio_cols=["PB_ratio", "prev_PB_ratio", "trailing_one_year_PB_ratio"],
+        ratio_cols=["PB_ratio", "trailing_PB_ratio", "trailing_one_year_PB_ratio"],
     )
 
 
@@ -172,7 +165,7 @@ def get_roa_data(ticker: str, company_facts: dict, start_year: int, end_year: in
 
     combined_df["roa"] = combined_df["net_q"] / combined_df["assets"]
     combined_df["trailing_roa"] = combined_df["roa"].shift(1)
-    combined_df["avg_one_year_trailing_roa"] = (
+    combined_df["one_year_avg_trailing_roa"] = (
         combined_df["trailing_roa"].rolling(4, min_periods=1).mean()
     )
 
@@ -209,7 +202,7 @@ def get_current_ratio_data(
         quantity_name="liabilities_current",
     )
 
-    merged_df = pd.merge_asof(
+    CR_df = pd.merge_asof(
         cleaned_cur_assets.sort_values("end"),
         cleaned_liab_current.sort_values("end"),
         on="end",
@@ -217,16 +210,14 @@ def get_current_ratio_data(
         direction="backward",
         suffixes=("_assets", "_liab"),
     )
-    merged_df["current_ratio"] = (
-        merged_df["assets_current"] / merged_df["liabilities_current"]
-    )
-    merged_df["trailing_current_ratio"] = merged_df["current_ratio"].shift(1)
-    merged_df["avg_one_year_trailing_current_ratio"] = (
-        merged_df["trailing_current_ratio"].rolling(4, min_periods=1).mean()
+    CR_df["CR"] = CR_df["assets_current"] / CR_df["liabilities_current"]
+    CR_df["trailing_CR"] = CR_df["CR"].shift(1)
+    CR_df["one_year_avg_trailing_CR"] = (
+        CR_df["trailing_CR"].rolling(4, min_periods=1).mean()
     )
 
-    logger.info(f"Computed Current Ratio table with {len(merged_df)} rows for {ticker}")
-    return merged_df
+    logger.info(f"Computed Current Ratio table with {len(CR_df)} rows for {ticker}")
+    return CR_df
 
 
 def get_historical_price_features(ticker: str, ticker_price_data: pd.DataFrame):
