@@ -35,17 +35,7 @@ def get_start_and_end_of_quarter(year: int, quarter: int):
     return start, end
 
 
-def _get_sum_of_prev_quarters(y_q_to_quantity_map: dict, year: int, quantity_name: str):
-    sum_prev = (
-        y_q_to_quantity_map.get((year, "Q1"), {}).get(quantity_name, 0)
-        + y_q_to_quantity_map.get((year, "Q2"), {}).get(quantity_name, 0)
-        + y_q_to_quantity_map.get((year, "Q3"), {}).get(quantity_name, 0)
-    )
-    logger.debug(f"Sum of previous quarters for year {year}: {sum_prev}")
-    return sum_prev
-
-
-def _eps_get_frame_data(eps_table: pd.DataFrame, year: int, quarter: str):
+def _get_frame_data(eps_table: pd.DataFrame, year: int, quarter: str):
     subset = eps_table[
         (eps_table["end"].dt.year == year)
         & (eps_table["frame"] == f"CY{year}{quarter}")
@@ -121,7 +111,7 @@ def clean_period_table(eps_table: pd.DataFrame, start_year: int, end_year: int, 
     for year in range(start_year, end_year + 1):
         for quarter in ["Q1", "Q2", "Q3", "Q4"]:
 
-            y_q_eps_table = _eps_get_frame_data(eps_table, year, quarter)
+            y_q_eps_table = _get_frame_data(eps_table, year, quarter)
             if y_q_eps_table is None:
                 continue
             
@@ -134,7 +124,7 @@ def clean_period_table(eps_table: pd.DataFrame, start_year: int, end_year: int, 
                 "fp": quarter,
             }
 
-        y_q_eps_table = _eps_get_frame_data(eps_table, year, "")
+        y_q_eps_table = _get_frame_data(eps_table, year, "")
         if y_q_eps_table is not None:
             start, end = get_start_and_end_of_quarter(year, 0)
             y_q_to_quantity_map[(year, "FY")] = {
