@@ -6,7 +6,6 @@ from pandas import Timestamp
 
 def determine_quarter(end_date: Timestamp):
     quarter = end_date.quarter
-    logger.debug(f"Determined quarter {quarter} for end_date {end_date}")
     return quarter
 
 
@@ -31,7 +30,6 @@ def get_start_and_end_of_quarter(year: int, quarter: int):
         start, end = Timestamp(year=year, month=1, day=1), Timestamp(
             year=year, month=12, day=31
         )
-    logger.debug(f"Quarter {quarter} for year {year}: start={start}, end={end}")
     return start, end
 
 
@@ -167,6 +165,9 @@ def clean_instance_tables(
             )
 
     filtered_instance = pd.DataFrame.from_records(y_q_to_equity_list)
+    if filtered_instance.empty:
+        logger.warning("No data found in instance table after filtering")
+        raise ValueError("No data found in instance table after filtering")
 
     for year in range(start_year, end_year + 1):
         for quarter in ["Q1", "Q2", "Q3", "Q4", "FY"]:

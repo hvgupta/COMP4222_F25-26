@@ -1,8 +1,12 @@
 from .logger import logger
 from .market_data_fetcher import *
+from .feature_lists import HISTORICAL_DATA_FEATURES
 
 import talib
 import pandas as pd
+
+class SKIPException(Exception):
+    pass
 
 
 def _price_align_and_compute_ratio(
@@ -56,7 +60,7 @@ def get_PE_ratio_data(
     eps_table = eps_table.copy()
     # ensure datetime types
 
-    eps_table["start"] = pd.to_datetime(eps_table["start"], errors="coerce")
+    eps_table["start"] = pd.to_datetime(eps_table["start"], errors="coerce")  # type: ignore
     eps_table["end"] = pd.to_datetime(eps_table["end"], errors="coerce")
 
     eps_table = clean_period_table(eps_table, start_year, end_year, "eps")
@@ -83,33 +87,40 @@ def get_PB_ratio_data(
     end_year: int,
 ):
     logger.info(f"Extracting PB ratio data for {ticker}")
-    equity_table = extract_quarterly_data(company_facts, "StockholdersEquity", "USD")
-    logger.info(f"Extracted {len(equity_table)} equity points for {ticker}")
 
-    shares_table = extract_quarterly_data(
-        company_facts, "CommonStockSharesOutstanding", "shares"
-    )
-    logger.info(f"Extracted {len(shares_table)} shares outstanding points for {ticker}")
+    equity_table = extract_quarterly_data(company_facts, "StockholdersEquity", "USD")
+
+    standardised_shares = None
+    shares_table = None
+    for possible_tag in [
+        "CommonStockSharesOutstanding",
+        "EntityCommonStockSharesOutstanding",
+        "NumberOfCommonSharesOutstanding",
+        "CommonStockSharesIssued",
+        "WeightedAverageNumberOfSharesOutstandingBasic",
+        "WeightedAverageNumberOfSharesOutstandingDiluted",
+    ]:
+        try:
+            shares_table = extract_quarterly_data(company_facts, possible_tag, "shares")
+            standardised_shares = clean_instance_tables(
+                shares_table,
+                start_year=start_year,
+                end_year=end_year,
+                quantity_name="shareQuantity",
+            )
+            break
+        except Exception:
+            logger.warning(f"Failed to extract shares data using tag {possible_tag}")
+            continue
+    
+    if standardised_shares is None or standardised_shares.empty:
+        raise SKIPException(f"No valid shares data found for {ticker}")
 
     standardised_equity = clean_instance_tables(
         equity_table,
         start_year=start_year,
         end_year=end_year,
         quantity_name="stockHolder_equity",
-    )
-    logger.info(
-        f"Standardised equity to {len(standardised_equity)} points for {ticker}"
-    )
-
-    standardised_shares = clean_instance_tables(
-        shares_table,
-        start_year=start_year,
-        end_year=end_year,
-        quantity_name="shareQuantity",
-    )
-
-    logger.info(
-        f"Standardised shares to {len(standardised_shares)} points for {ticker}"
     )
 
     eqps_table = pd.merge_asof(
@@ -224,24 +235,7 @@ def get_historical_price_features(ticker: str, ticker_price_data: pd.DataFrame):
     logger.info(f"Computing historical price features for {ticker}")
 
     price_df = ticker_price_data.copy()
-    price_features_df = pd.DataFrame(
-        columns=[
-            "Date",
-            "PCT-1",
-            "PCT-5",
-            "PCT-10",
-            "PCT-15",
-            "PCT-20",
-            "MOM-5",
-            "MOM-10",
-            "MOM-15",
-            "MOM-20",
-            "NATR-5",
-            "NATR-10",
-            "NATR-15",
-            "NATR-20",
-        ]
-    )
+    price_features_df = pd.DataFrame(columns=["Date"] + HISTORICAL_DATA_FEATURES)
 
     close_numpy = price_df["Close"].to_numpy().reshape(-1)
     high_numpy = price_df["High"].to_numpy().reshape(-1)
@@ -263,7 +257,7 @@ def get_historical_price_features(ticker: str, ticker_price_data: pd.DataFrame):
     natr15 = talib.NATR(high_numpy, low_numpy, close_numpy, timeperiod=15)
     natr20 = talib.NATR(high_numpy, low_numpy, close_numpy, timeperiod=20)
 
-    price_features_df["date"] = price_df.index
+    price_features_df["Date"] = price_df.index
 
     price_features_df["PCT-1"] = pct1
     price_features_df["PCT-5"] = pct5
