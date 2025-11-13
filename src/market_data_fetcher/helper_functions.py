@@ -47,16 +47,10 @@ def _get_frame_data(eps_table: pd.DataFrame, year: int, quarter: str):
 
     return subset.iloc[0]
 
-def _compute_missing_quarter_from_fy(
-    y_q_to_quantity_map: dict,
-    year: int,
-    quantity_name: str,
-) -> dict:
 
-    fy_entry = y_q_to_quantity_map.get((year, "FY"))
-    if fy_entry is None:
-        logger.debug(f"No FY for {year}, cannot compute missing quarter")
-        return y_q_to_quantity_map
+def _compute_missing_quarter_from_fy(
+    y_q_to_quantity_map: dict, year: int, quantity_name: str, fy_val: float
+) -> dict:
 
     # collect present quarters
     present = {}
@@ -83,11 +77,6 @@ def _compute_missing_quarter_from_fy(
 
     missing_q = missing_qs[0]
     sum_three = sum(present.values())
-    try:
-        fy_val = float(fy_entry.get(quantity_name))
-    except Exception:
-        logger.warning(f"FY value for {year} not numeric; cannot impute {missing_q}")
-        return y_q_to_quantity_map
 
     imputed_val = fy_val - sum_three
     start, end = get_start_and_end_of_quarter(year, int(missing_q[1]))
@@ -104,9 +93,11 @@ def _compute_missing_quarter_from_fy(
     return y_q_to_quantity_map
 
 
-def clean_period_table(eps_table: pd.DataFrame, start_year: int, end_year: int, quantity_name: str):
+def clean_period_table(
+    eps_table: pd.DataFrame, start_year: int, end_year: int, quantity_name: str
+):
     logger.info(f"Starting to clean EPS table with {len(eps_table)} rows")
-    filtered_eps = pd.DataFrame(columns=["start", "end", quantity_name, "fp"])
+    filtered_period_table = pd.DataFrame(columns=["start", "end", quantity_name, "fp"])
     y_q_to_quantity_map = {}
     for year in range(start_year, end_year + 1):
         for quarter in ["Q1", "Q2", "Q3", "Q4"]:
@@ -114,9 +105,9 @@ def clean_period_table(eps_table: pd.DataFrame, start_year: int, end_year: int, 
             y_q_eps_table = _get_frame_data(eps_table, year, quarter)
             if y_q_eps_table is None:
                 continue
-            
+
             start, end = get_start_and_end_of_quarter(year, int(quarter[1]))
-            
+
             y_q_to_quantity_map[(year, quarter)] = {
                 "start": start,
                 "end": end,
@@ -125,25 +116,28 @@ def clean_period_table(eps_table: pd.DataFrame, start_year: int, end_year: int, 
             }
 
         y_q_eps_table = _get_frame_data(eps_table, year, "")
-        if y_q_eps_table is not None:
-            start, end = get_start_and_end_of_quarter(year, 0)
-            y_q_to_quantity_map[(year, "FY")] = {
-                "start": start,
-                "end": end,
-                quantity_name: y_q_eps_table["val"],
-                "fp": "FY",
-            }
-
+        if y_q_eps_table is None:
+            logger.warning(f"No FY data for year {year}, cannot impute missing quarters")
+            continue
 
         y_q_to_quantity_map = _compute_missing_quarter_from_fy(
-            y_q_to_quantity_map, year, quantity_name
+            y_q_to_quantity_map, year, quantity_name, y_q_eps_table["val"]
         )
 
-    filtered_eps = pd.concat(
-        [filtered_eps, pd.DataFrame(list(y_q_to_quantity_map.values()))], ignore_index=True
+    filtered_period_table = pd.concat(
+        [filtered_period_table, pd.DataFrame(list(y_q_to_quantity_map.values()))],
+        ignore_index=True,
     )
-    logger.info(f"Cleaned EPS table: {len(filtered_eps)} rows after processing")
-    return filtered_eps
+    logger.info(
+        f"Cleaned period table: {len(filtered_period_table)} rows after processing"
+    )
+
+    filtered_period_table.sort_values(
+        ["end", "start"], ascending=[True, False], inplace=True
+    )
+    filtered_period_table.reset_index(drop=True, inplace=True)
+
+    return filtered_period_table
 
 
 def clean_instance_tables(
@@ -171,16 +165,6 @@ def clean_instance_tables(
                     "fp": quarter[:-1],
                 }
             )
-
-            if quarter == "Q4I":
-                y_q_to_equity_list.append(
-                    {
-                        "start": Timestamp(year=year, month=1, day=1),
-                        "end": end,
-                        quantity_name: latest_row["val"],
-                        "fp": "FY",
-                    }
-                )
 
     filtered_instance = pd.DataFrame.from_records(y_q_to_equity_list)
 

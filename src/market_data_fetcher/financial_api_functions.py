@@ -14,7 +14,7 @@ def fetch_sp500_companies():
 
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     response = requests.get(url, headers=HEADERS)
-    sp500 = pd.read_html(StringIO(response.text))[0]
+    sp500 = pd.read_html(StringIO(response.text))[1]
 
     logger.info("Successfully fetched S&P 500 company list")
     return sp500
@@ -49,7 +49,7 @@ def fetch_ticker_historical_prices(ticker_symbol: str, start_date: str, end_date
         f"Fetching historical prices for {ticker_symbol} from {start_date} to {end_date}"
     )
 
-    data = yf.download(ticker_symbol, start=start_date, end=end_date)
+    data = yf.download(ticker_symbol, start=start_date, end=end_date, multi_level_index=False)
 
     logger.info(f"Successfully fetched historical prices for {ticker_symbol}")
     
