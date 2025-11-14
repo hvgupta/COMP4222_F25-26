@@ -3,3 +3,5 @@
 **.venv
 **.vscode
 **__pycache__/
+**.log
+**features_test_output.csv

@@ -1,7 +1,9 @@
 from .company_feature_functions import *
 from .feature_lists import *
 
+import os
 import pandas as pd
+from pathlib import Path
 from pandas import Timestamp
 
 
@@ -57,72 +59,100 @@ class GraphManager:
         ][columns].reset_index(drop=True)
         return company_features
 
-    def gather_features(self):
+    async def _extract_company_info(
+        self, row: pd.Series, start_date_str: str, end_date_str: str
+    ):
+        ticker = row["Symbol"]
+        prices = await fetch_ticker_historical_prices(
+            ticker, start_date_str, end_date_str
+        )
+
+        self.historical_prices.loc[:, pd.IndexSlice[:, ticker]] = prices  # type: ignore
+
+        company_concept = await fetch_sec_concepts(TICKER_TO_CIK_MAP[ticker])
+
+        company_features = pd.DataFrame(columns=ALL_FEATURES)
+
+        company_price_features = get_historical_price_features(ticker, prices)
+        # company_price_features = company_price_features[]
+        company_features[["Date"] + HISTORICAL_DATA_FEATURES] = company_price_features
+
+        company_PE_ratio_df = await get_PE_ratio_data(
+            ticker, prices, company_concept["facts"], self.start_year, self.end_year
+        )
+        company_features = self._merge_into_company_features(
+            company_features, company_PE_ratio_df, PE_FEATURES
+        )
+
+        company_PB_ratio_df = await get_PB_ratio_data(
+            ticker, prices, company_concept["facts"], self.start_year, self.end_year
+        )
+        company_features = self._merge_into_company_features(
+            company_features, company_PB_ratio_df, PB_FEATURES
+        )
+
+        company_ROA_df = await get_roa_data(
+            ticker, company_concept["facts"], self.start_year, self.end_year
+        )
+        company_features = self._merge_into_company_features(
+            company_features, company_ROA_df, ROA_FEATURES
+        )
+
+        company_current_ratio_df = await get_current_ratio_data(
+            ticker, company_concept["facts"], self.start_year, self.end_year
+        )
+        company_features = self._merge_into_company_features(
+            company_features, company_current_ratio_df, CURRENT_FEATURES
+        )
+
+        company_features["Symbol"] = ticker
+        sector_one_hot = get_one_hot_sector(row["GICS Sector"], ALL_GICS_SECTORS)
+        company_features[sector_one_hot.index] = sector_one_hot.values
+
+        return company_features
+
+    def _check_seen_symbols(self):
+        output_file = Path(__file__).parent / "features_test_output.csv"
+        if output_file.exists():
+            existing_features = pd.read_csv(output_file)
+            seen_symbols = existing_features["Symbol"].unique().tolist()
+            self.company_df = self.company_df[
+                ~self.company_df["Symbol"].isin(seen_symbols)
+            ]
+            self.features = existing_features
+            print(f"Resuming from {len(seen_symbols)} seen symbols.")
+        else:
+            print("No existing features file found. Starting fresh.")
+
+    async def gather_features(self, batch_size: int = 10):
+        
+        self._check_seen_symbols()
+        
         start_date = Timestamp(year=self.start_year - 1, month=12, day=1)
         end_date = Timestamp(year=self.end_year, month=12, day=31)
 
         start_date_str = start_date.strftime("%Y-%m-%d")
         end_date_str = end_date.strftime("%Y-%m-%d")
 
-        for i, row in self.company_df.iterrows():
+        all_feature_tasks = [
+            self._extract_company_info(row, start_date_str, end_date_str)
+            for _, row in self.company_df.iterrows()
+        ]
 
-            if i == 5:
-                break
-
-            ticker = row["Symbol"]
-            prices = fetch_ticker_historical_prices(
-                ticker, start_date_str, end_date_str
+        for i in range(0, len(all_feature_tasks), batch_size):
+            batch_tasks = all_feature_tasks[i : i + batch_size]
+            batch_company_features = await asyncio.gather(
+                *batch_tasks, return_exceptions=True
             )
 
-            self.historical_prices.loc[:, pd.IndexSlice[:, ticker]] = prices  # type: ignore
-
-            company_concept = fetch_sec_concepts(TICKER_TO_CIK_MAP[ticker])
-
-            company_features = pd.DataFrame(columns=ALL_FEATURES)
-
-            company_price_features = get_historical_price_features(ticker, prices)
-            # company_price_features = company_price_features[]
-            company_features[["Date"] + HISTORICAL_DATA_FEATURES] = (
-                company_price_features
-            )
-
-            company_PE_ratio_df = get_PE_ratio_data(
-                ticker, prices, company_concept["facts"], self.start_year, self.end_year
-            )
-            company_features = self._merge_into_company_features(
-                company_features, company_PE_ratio_df, PE_FEATURES
-            )
-            try:
-                company_PB_ratio_df = get_PB_ratio_data(
-                    ticker, prices, company_concept["facts"], self.start_year, self.end_year
+            for company_features in batch_company_features:
+                if not isinstance(company_features, pd.DataFrame):
+                    logger.error(f"Error fetching company features: {company_features}")
+                    continue
+                self.features = pd.concat(
+                    [self.features, company_features], ignore_index=True
                 )
-            except SKIPException as e:
-                logger.warning(f"Skipping {ticker} due to missing data: {e}")
-                continue
-            
-            company_features = self._merge_into_company_features(
-                company_features, company_PB_ratio_df, PB_FEATURES
-            )
 
-            company_ROA_df = get_roa_data(
-                ticker, company_concept["facts"], self.start_year, self.end_year
-            )
-            company_features = self._merge_into_company_features(
-                company_features, company_ROA_df, ROA_FEATURES
-            )
-
-            company_current_ratio_df = get_current_ratio_data(
-                ticker, company_concept["facts"], self.start_year, self.end_year
-            )
-            company_features = self._merge_into_company_features(
-                company_features, company_current_ratio_df, CURRENT_FEATURES
-            )
-
-            company_features["Symbol"] = ticker
-            sector_one_hot = get_one_hot_sector(row["GICS Sector"], ALL_GICS_SECTORS)
-            company_features[sector_one_hot.index] = sector_one_hot.values
-
-
-            self.features = pd.concat([self.features, company_features], ignore_index=True)
+            await asyncio.sleep(1)  # brief pause between batches to avoid rate limits
 
         return self.features
