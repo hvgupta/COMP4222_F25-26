@@ -5,6 +5,7 @@ from .feature_lists import HISTORICAL_DATA_FEATURES
 import talib
 import pandas as pd
 
+
 class SKIPException(Exception):
     pass
 
@@ -44,14 +45,14 @@ def _price_align_and_compute_ratio(
     return financial_data
 
 
-def get_PE_ratio_data(
+async def get_PE_ratio_data(
     ticker: str,
     ticker_price_data: pd.DataFrame,
     company_facts: dict,
     start_year: int,
     end_year: int,
 ):
-    eps_table = extract_quarterly_data(
+    eps_table = await extract_quarterly_data(
         company_facts, "EarningsPerShareBasic", "USD/shares"
     )
     if eps_table.empty:
@@ -79,7 +80,7 @@ def get_PE_ratio_data(
     )
 
 
-def get_PB_ratio_data(
+async def get_PB_ratio_data(
     ticker: str,
     ticker_price_data: pd.DataFrame,
     company_facts: dict,
@@ -88,7 +89,9 @@ def get_PB_ratio_data(
 ):
     logger.info(f"Extracting PB ratio data for {ticker}")
 
-    equity_table = extract_quarterly_data(company_facts, "StockholdersEquity", "USD")
+    equity_table = await extract_quarterly_data(
+        company_facts, "StockholdersEquity", "USD"
+    )
 
     standardised_shares = None
     shares_table = None
@@ -101,7 +104,9 @@ def get_PB_ratio_data(
         "WeightedAverageNumberOfSharesOutstandingDiluted",
     ]:
         try:
-            shares_table = extract_quarterly_data(company_facts, possible_tag, "shares")
+            shares_table = await extract_quarterly_data(
+                company_facts, possible_tag, "shares"
+            )
             standardised_shares = clean_instance_tables(
                 shares_table,
                 start_year=start_year,
@@ -112,7 +117,7 @@ def get_PB_ratio_data(
         except Exception:
             logger.warning(f"Failed to extract shares data using tag {possible_tag}")
             continue
-    
+
     if standardised_shares is None or standardised_shares.empty:
         raise SKIPException(f"No valid shares data found for {ticker}")
 
@@ -153,10 +158,12 @@ def get_PB_ratio_data(
     )
 
 
-def get_roa_data(ticker: str, company_facts: dict, start_year: int, end_year: int):
+async def get_roa_data(
+    ticker: str, company_facts: dict, start_year: int, end_year: int
+):
     logger.info(f"Computing ROA for {ticker} from {start_year} to {end_year}")
-    net_df = extract_quarterly_data(company_facts, "NetIncomeLoss", "USD")
-    assets_df = extract_quarterly_data(company_facts, "Assets", "USD")
+    net_df = await extract_quarterly_data(company_facts, "NetIncomeLoss", "USD")
+    assets_df = await extract_quarterly_data(company_facts, "Assets", "USD")
 
     net_df["start"] = pd.to_datetime(net_df["start"], errors="coerce")  # type: ignore
     net_df["end"] = pd.to_datetime(net_df["end"], errors="coerce")  # type: ignore
@@ -184,7 +191,7 @@ def get_roa_data(ticker: str, company_facts: dict, start_year: int, end_year: in
     return combined_df
 
 
-def get_current_ratio_data(
+async def get_current_ratio_data(
     ticker: str,
     company_facts: dict,
     start_year: int,
@@ -194,8 +201,12 @@ def get_current_ratio_data(
         f"Computing ROA and Current Ratio for {ticker} from {start_year} to {end_year}"
     )
 
-    assets_current_df = extract_quarterly_data(company_facts, "AssetsCurrent", "USD")
-    liab_current_df = extract_quarterly_data(company_facts, "LiabilitiesCurrent", "USD")
+    assets_current_df = await extract_quarterly_data(
+        company_facts, "AssetsCurrent", "USD"
+    )
+    liab_current_df = await extract_quarterly_data(
+        company_facts, "LiabilitiesCurrent", "USD"
+    )
 
     assets_current_df["end"] = pd.to_datetime(assets_current_df["end"], errors="coerce")  # type: ignore
     liab_current_df["end"] = pd.to_datetime(liab_current_df["end"], errors="coerce")  # type: ignore
@@ -290,7 +301,7 @@ def get_one_hot_sector(ticker_sector: str, all_sectors: list[str]) -> pd.Series:
     return one_hot_series
 
 
-def get_profit_margin_data(
+async def get_profit_margin_data(
     ticker: str,
     company_facts: dict,
     start_year: int,
@@ -298,8 +309,8 @@ def get_profit_margin_data(
 ):
     logger.info(f"Computing Profit Margin for {ticker} from {start_year} to {end_year}")
 
-    net_df = extract_quarterly_data(company_facts, "NetIncomeLoss", "USD")
-    revenue_df = extract_quarterly_data(
+    net_df = await extract_quarterly_data(company_facts, "NetIncomeLoss", "USD")
+    revenue_df = await extract_quarterly_data(
         company_facts,
         "RevenueFromContractWithCustomerExcludingAssessedTax",
         "USD",
