@@ -1,19 +1,5 @@
 from src.market_data_fetcher import *
 
-# ======= HYPER-PARAMETERS ======
-
-WINDOW_SIZE = 5
-"Number of Trading Days considered for correlation calculation"  # basically take the average over the window size
-
-CORRELATION_THRESHOLD = 0.8
-"Minimum correlation value to consider an edge between two tickers"
-
-START_YEAR = 2020
-
-END_YEAR = 2025
-
-# ===============================
-
 TICKER_TO_CIK_MAP = fetch_ticker_to_cik_map()
 SP500_COMPANIES = fetch_sp500_companies()
 
@@ -61,6 +47,7 @@ CUR_PRICE_FEATURES = [
     "Low",
     "High",
     "Close",
+    "Volume"
 ]
 
 ALL_SECTORS_FEATURES = ["Sector_" + sector for sector in ALL_GICS_SECTORS]

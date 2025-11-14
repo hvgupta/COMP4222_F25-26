@@ -1,10 +1,24 @@
 from .company_feature_functions import *
 from .feature_lists import *
 
-import os
 import pandas as pd
 from pathlib import Path
 from pandas import Timestamp
+from itertools import combinations
+
+# ======= HYPER-PARAMETERS ======
+
+WINDOW_SIZE = 5
+"Number of Trading Days considered for correlation calculation"  # basically take the average over the window size
+
+CORRELATION_THRESHOLD = 0.8
+"Minimum correlation value to consider an edge between two tickers"
+
+START_YEAR = 2020
+
+END_YEAR = 2025
+
+# ===============================
 
 
 class GraphManager:
@@ -108,6 +122,7 @@ class GraphManager:
         company_features["Symbol"] = ticker
         sector_one_hot = get_one_hot_sector(row["GICS Sector"], ALL_GICS_SECTORS)
         company_features[sector_one_hot.index] = sector_one_hot.values
+        company_features[CUR_PRICE_FEATURES] = prices[CUR_PRICE_FEATURES]
 
         return company_features
 
@@ -124,10 +139,10 @@ class GraphManager:
         else:
             print("No existing features file found. Starting fresh.")
 
-    async def gather_features(self, batch_size: int = 10):
-        
+    async def async_gather_features(self, batch_size: int = 10):
+
         self._check_seen_symbols()
-        
+
         start_date = Timestamp(year=self.start_year - 1, month=12, day=1)
         end_date = Timestamp(year=self.end_year, month=12, day=31)
 
@@ -156,3 +171,60 @@ class GraphManager:
             await asyncio.sleep(1)  # brief pause between batches to avoid rate limits
 
         return self.features
+
+    def build_graph(
+        self, start_date: pd.Timestamp, end_date: pd.Timestamp, column: str
+    ):
+        """
+        Build a correlation graph using rolling-window average correlations.
+
+        Args:
+            start_date (Timestamp): The start of the date range.
+            end_date (Timestamp): The end of the date range.
+            column (str): Price column ("Close", "Open", "Return", etc.)
+
+        Returns:
+            edges: list of (stock_i, stock_j, avg_corr)
+            corr_matrix: DataFrame of average correlations
+        """
+
+        # ─────────────────────────────────────────────
+        # STEP 1: Filter by date + pivot to wide format
+        # ─────────────────────────────────────────────
+        df = self.historical_prices
+        df = df[(df["Date"] >= start_date) & (df["Date"] <= end_date)]
+
+        pivot = df.pivot(index="Date", columns="Symbol", values=column).sort_index()
+
+        # Optionally: convert prices → daily returns
+        # pivot = pivot.pct_change().dropna()
+
+        symbols = pivot.columns.tolist()
+
+        # ─────────────────────────────────────────────
+        # STEP 2: Compute rolling correlations for pairs
+        # ─────────────────────────────────────────────
+        # This creates a multi-index correlation DataFrame
+        rolling_corr = pivot.rolling(self.window_size).corr()
+
+        # ─────────────────────────────────────────────
+        # STEP 3: Average correlation across all windows
+        # ─────────────────────────────────────────────
+        avg_corr_matrix = rolling_corr.groupby(level=1).mean()
+
+        # Now avg_corr_matrix is a square matrix like:
+        #         AAPL   MSFT   NVDA
+        # AAPL    1.0    0.65   0.52
+        # MSFT    0.65   1.0    0.58
+        # NVDA    0.52   0.58   1.0
+
+        # ─────────────────────────────────────────────
+        # STEP 4: Build edge list using threshold
+        # ─────────────────────────────────────────────
+        edges = []
+        for i, j in combinations(symbols, 2):
+            corr_val = avg_corr_matrix.loc[i, j]
+            if pd.notna(corr_val) and corr_val >= self.corr_threshold:  # type: ignore
+                edges.append((i, j, float(corr_val)))  # type: ignore
+
+        return edges, avg_corr_matrix
