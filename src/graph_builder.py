@@ -232,6 +232,7 @@ class GraphManager:
     
     def get_dataset(
         self,
+        start_year: int,
         end_year: int,
         n_samples: int = 1000,
         price_column: str = "Close"
@@ -243,6 +244,7 @@ class GraphManager:
         predict target node's current day PCT-1.
         
         Args:
+            start_year (int): Start year for data collection
             end_year (int): End year for data collection
             n_samples (int): Number of random samples to return
             price_column (str): Price column to use for correlation ("Close", "Open", etc.)
@@ -254,8 +256,8 @@ class GraphManager:
                 - Columns: target node's current day PCT-1 + target_node_idx
         """
         
-        # Build graph using the specified year
-        start_date = pd.Timestamp(year=end_year - 1, month=1, day=1)
+        # Build graph using the specified year range
+        start_date = pd.Timestamp(year=start_year, month=1, day=1)
         end_date = pd.Timestamp(year=end_year, month=12, day=31)
         
         edges, _ = self.build_graph(start_date, end_date, price_column)
