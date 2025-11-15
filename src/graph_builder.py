@@ -228,3 +228,6 @@ class GraphManager:
                 edges.append((i, j, float(corr_val)))  # type: ignore
 
         return edges, avg_corr_matrix
+    
+    def get_dataset(self, end_year: int):
+        ...
