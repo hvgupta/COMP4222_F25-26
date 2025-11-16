@@ -272,9 +272,8 @@ class GraphManager:
             return pd.DataFrame(), pd.DataFrame()
 
         # Create a mapping of ticker to index for both X and Y
-        unique_symbols = list(
-            set([edge[0] for edge in edges] + [edge[1] for edge in edges])
-        )
+        unique_symbols = self.features["Symbol"].unique().tolist() # takes the global context into consideration
+        
         ticker_to_idx = {ticker: idx for idx, ticker in enumerate(unique_symbols)}
 
         # Prepare features dataframe with dates

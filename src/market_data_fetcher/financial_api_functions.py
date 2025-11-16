@@ -67,6 +67,9 @@ async def fetch_ticker_historical_prices(
     if data is None or data.empty:
         logger.warning(f"No historical price data found for {ticker_symbol}")
         raise ValueError(f"No historical price data found for {ticker_symbol}")
+    
+    data.reset_index(inplace=True)
+    data["Date"] = pd.to_datetime(data["Date"])
 
     return data
 
