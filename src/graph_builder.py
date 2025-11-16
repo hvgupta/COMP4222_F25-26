@@ -133,7 +133,7 @@ class GraphManager:
         return company_features
 
     def _check_seen_symbols(self):
-        output_file = Path(__file__).parent / "features_test_output.csv"
+        output_file = Path(__file__).parent / "features.csv"
         if output_file.exists():
             existing_features = pd.read_csv(output_file, index_col=0)  # Add index_col=0
             seen_symbols = existing_features["Symbol"].unique().tolist()
@@ -379,7 +379,7 @@ class GraphManager:
         return X_df, Y_df
 
     def load_features_csv(self):
-        path = Path(__file__).parent / "features_test_output.csv"
+        path = Path(__file__).parent / "features.csv"
         self.features = pd.read_csv(path, index_col=0)
         self.features["Date"] = pd.to_datetime(self.features["Date"], format="mixed")
         self.historical_prices = self.features[

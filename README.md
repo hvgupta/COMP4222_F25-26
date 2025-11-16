@@ -3,6 +3,7 @@
 ## Overview
 This project analyzes correlations among NASDAQ S&P 500 stocks using graph-based machine learning techniques. By constructing a correlation graph where nodes represent stocks and edges represent statistical relationships, we identify communities of related stocks, detect systemic patterns, and predict next-window correlations
 
+
 ## Key Features
 - **Market Data Retrieval**: Fetches historical stock prices and financial data from Yahoo Finance and SEC filings
 - **Feature Engineering**: Computes technical indicators (momentum, price changes, volatility) and fundamental metrics (P/E ratio, P/B ratio, ROA, current ratio)
@@ -39,14 +40,30 @@ This project analyzes correlations among NASDAQ S&P 500 stocks using graph-based
    git clone <repository_url>
    cd COMP4222_F25-26
    ```
+2. **Create a virtual environment**
+  ```bash
+    python3 -m venv .venv
+  ```
+  if you are on windows then:
+  ```bash
+  .venv\Scripts\activate
+  ```
 
-2. **Install dependencies**
+  if on Linux:
+  ```bash
+    source .venv/bin/activate
+  ```
+
+3. **Install dependencies**
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Set up environment (if needed)**
-   - Create a `.env` file if external API keys are required
+4. first unzip the zip file `./src/feature_csv.zip` (Optional)
+  - if you want to use fresh data instead just proceed to the next step, no need to unzip (however this will make the process much longer as the code also gathers the data)
+
+5. run the `./src/train.py` file to train the model on the current data
+
 
 ## Running the Project
 
