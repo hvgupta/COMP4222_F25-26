@@ -1,7 +1,7 @@
 # Stock Correlation Prediction
 
 ## Overview
-This project analyzes correlations among NASDAQ S&P 500 stocks using graph-based machine learning techniques. By constructing a correlation graph where nodes represent stocks and edges represent statistical relationships, we identify communities of related stocks, detect systemic patterns, and predict next-window correlations using Ridge/Lasso and XGBoost models.
+This project analyzes correlations among NASDAQ S&P 500 stocks using graph-based machine learning techniques. By constructing a correlation graph where nodes represent stocks and edges represent statistical relationships, we identify communities of related stocks, detect systemic patterns, and predict next-window correlations
 
 ## Key Features
 - **Market Data Retrieval**: Fetches historical stock prices and financial data from Yahoo Finance and SEC filings
@@ -50,10 +50,9 @@ This project analyzes correlations among NASDAQ S&P 500 stocks using graph-based
 
 ## Running the Project
 
-To build the correlation graph and train models:
-```bash
-python -m src.graph_builder
-```
+To train the model:
+- run the train.py file in `/src`
+
 
 ## Dependencies
 - `pandas`: Data manipulation and analysis
@@ -68,7 +67,7 @@ python -m src.graph_builder
 - **Stock Universe**: S&P 500 companies
 - **Correlation Window**: 5-day rolling windows (configurable)
 - **Correlation Threshold**: 0.8 (configurable)
-- **Models**: Ridge/Lasso (linear), XGBoost (non-linear)
+- **Models**: TwoTowerSAGE
 
 ---
 
