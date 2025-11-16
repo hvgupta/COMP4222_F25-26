@@ -42,15 +42,9 @@ CURRENT_FEATURES = [
     "one_year_avg_trailing_CR",
 ]
 
-CUR_PRICE_FEATURES = [
-    "Open",
-    "Low",
-    "High",
-    "Close",
-    "Volume"
-]
+CUR_PRICE_FEATURES = ["Open", "Low", "High", "Close", "Volume"]
 
-ALL_SECTORS_FEATURES = ["Sector_" + sector for sector in ALL_GICS_SECTORS]
+ALL_SECTORS_FEATURES: list[str] = ["Sector_" + sector for sector in ALL_GICS_SECTORS]
 
 ALL_FEATURES: list[str] = [
     "Date",

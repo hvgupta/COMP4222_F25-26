@@ -1,9 +1,9 @@
 from .company_feature_functions import *
 from .feature_lists import *
 
+import numpy as np
 import pandas as pd
 from pathlib import Path
-from random import sample
 from pandas import Timestamp
 from itertools import combinations
 
@@ -82,8 +82,6 @@ class GraphManager:
             ticker, start_date_str, end_date_str
         )
 
-        self.historical_prices.loc[:, pd.IndexSlice[:, ticker]] = prices  # type: ignore
-
         company_concept = await fetch_sec_concepts(TICKER_TO_CIK_MAP[ticker])
 
         company_features = pd.DataFrame(columns=ALL_FEATURES)
@@ -122,8 +120,15 @@ class GraphManager:
 
         company_features["Symbol"] = ticker
         sector_one_hot = get_one_hot_sector(row["GICS Sector"], ALL_GICS_SECTORS)
-        company_features[sector_one_hot.index] = sector_one_hot.values
+        
+        company_features[ALL_SECTORS_FEATURES] = sector_one_hot.values
         company_features[CUR_PRICE_FEATURES] = prices[CUR_PRICE_FEATURES]
+        prices["Symbol"] = ticker
+        
+        
+        self.historical_prices = pd.concat(
+            [self.historical_prices, prices], ignore_index=True
+        )
 
         return company_features
 
@@ -229,6 +234,133 @@ class GraphManager:
                 edges.append((i, j, float(corr_val)))  # type: ignore
 
         return edges, avg_corr_matrix
-    
-    def get_dataset(self, end_year: int):
-        ...
+
+    def get_dataset(
+        self,
+        start_year: int,
+        end_year: int,
+        n_samples: int = 1000,
+        price_column: str = "Close",
+    ):
+        """
+        Generate training dataset for edge prediction.
+
+        Given source node's previous day features and current day PCT-1,
+        predict target node's current day PCT-1.
+
+        Args:
+            start_year (int): Start year for data collection
+            end_year (int): End year for data collection
+            n_samples (int): Number of random samples to return
+            price_column (str): Price column to use for correlation ("Close", "Open", etc.)
+
+        Returns:
+            X (pd.DataFrame): Features for training
+                - Columns: source node's features + current day PCT-1 + source_node_idx
+            Y (pd.DataFrame): Target for training
+                - Columns: target node's current day PCT-1 + target_node_idx
+        """
+
+        # Build graph using the specified year range
+        start_date = pd.Timestamp(year=start_year, month=1, day=1)
+        end_date = pd.Timestamp(year=end_year, month=12, day=31)
+
+        edges, _ = self.build_graph(start_date, end_date, price_column)
+
+        if not edges:
+            logger.warning("No edges found in graph. Cannot generate dataset.")
+            return pd.DataFrame(), pd.DataFrame()
+
+        # Create a mapping of ticker to index for both X and Y
+        unique_symbols = self.features["Symbol"].unique().tolist() # takes the global context into consideration
+        
+        ticker_to_idx = {ticker: idx for idx, ticker in enumerate(unique_symbols)}
+
+        # Prepare features dataframe with dates
+        features_with_dates = self.features.copy()
+        features_with_dates["Date"] = pd.to_datetime(features_with_dates["Date"])
+        features_with_dates = features_with_dates.sort_values("Date").reset_index(
+            drop=True
+        )
+
+        X_samples = []
+        Y_samples = []
+
+        # For each edge (source, target, corr)
+        for source_ticker, target_ticker, _ in edges:
+
+            if source_ticker not in ticker_to_idx or target_ticker not in ticker_to_idx:
+                continue
+
+            source_idx = ticker_to_idx[source_ticker]
+            target_idx = ticker_to_idx[target_ticker]
+
+            # Get source and target data
+            source_data = features_with_dates[
+                features_with_dates["Symbol"] == source_ticker
+            ].reset_index(drop=True)
+            target_data = features_with_dates[
+                features_with_dates["Symbol"] == target_ticker
+            ].reset_index(drop=True)
+
+            if source_data.empty or target_data.empty:
+                continue
+
+            # For each date (skip first date since we need previous day)
+            for i in range(1, len(source_data)):
+                current_date = source_data.iloc[i]["Date"]
+
+                # Get target data for current date
+                target_current = target_data[target_data["Date"] == current_date]
+
+                if target_current.empty:
+                    continue
+
+                # Extract features
+                source_prev_row = source_data.iloc[i - 1]
+                target_curr_row = target_current.iloc[0]
+
+                # Build X: source's previous day features (all except Date, Symbol) + current day PCT-1
+                source_features = {
+                    col: source_prev_row[col]
+                    for col in source_prev_row.index
+                    if col not in ["Date", "Symbol"]
+                }
+
+                # Add source's current day PCT-1
+                source_features["current_PCT_1"] = source_data.iloc[i]["PCT-1"]
+                source_features["source_node_idx"] = source_idx
+
+                # Build Y: target's current day PCT-1 + target node index
+                y_sample = {
+                    "target_PCT_1": target_curr_row["PCT-1"],
+                    "target_node_idx": target_idx,
+                }
+
+                X_samples.append(source_features)
+                Y_samples.append(y_sample)
+
+        # Convert to DataFrames
+        X_df = pd.DataFrame(X_samples)
+        Y_df = pd.DataFrame(Y_samples)
+
+        if X_df.empty or Y_df.empty:
+            logger.warning("No valid samples generated for dataset.")
+            return pd.DataFrame(), pd.DataFrame()
+
+        # Random sampling
+        if len(X_df) > n_samples:
+            sample_indices = np.random.choice(len(X_df), n_samples, replace=False)
+            X_df = X_df.iloc[sample_indices].reset_index(drop=True)
+            Y_df = Y_df.iloc[sample_indices].reset_index(drop=True)
+
+        logger.info(f"Generated dataset with {len(X_df)} samples")
+
+        return X_df, Y_df
+
+    def load_features_csv(self):
+        path = Path(__file__).parent / "features_test_output.csv"
+        self.features = pd.read_csv(path, index_col=0)
+        self.features["Date"] = pd.to_datetime(self.features["Date"], format="mixed")
+        self.historical_prices = self.features[["Date", "Symbol", "Close", "High", "Low", "Open"]]
+        
