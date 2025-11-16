@@ -3,6 +3,7 @@ from .feature_lists import *
 
 import numpy as np
 import pandas as pd
+from torch import Tensor
 from pathlib import Path
 from pandas import Timestamp
 from itertools import combinations
@@ -120,12 +121,11 @@ class GraphManager:
 
         company_features["Symbol"] = ticker
         sector_one_hot = get_one_hot_sector(row["GICS Sector"], ALL_GICS_SECTORS)
-        
+
         company_features[ALL_SECTORS_FEATURES] = sector_one_hot.values
         company_features[CUR_PRICE_FEATURES] = prices[CUR_PRICE_FEATURES]
         prices["Symbol"] = ticker
-        
-        
+
         self.historical_prices = pd.concat(
             [self.historical_prices, prices], ignore_index=True
         )
@@ -227,13 +227,28 @@ class GraphManager:
         # ─────────────────────────────────────────────
         # STEP 4: Build edge list using threshold
         # ─────────────────────────────────────────────
-        edges = []
+        edges: list[list[str]] = []
         for i, j in combinations(symbols, 2):
             corr_val = avg_corr_matrix.loc[i, j]
             if pd.notna(corr_val) and corr_val >= self.corr_threshold:  # type: ignore
-                edges.append((i, j, float(corr_val)))  # type: ignore
+                edges.append([i, j]) 
 
         return edges, avg_corr_matrix
+
+    def create_edge_index_to_tensor(self, edges: list[list[str]], device):
+        symbols = self.company_df["Symbol"].unique().tolist()
+        ticker_to_id_map = {ticker: idx for idx, ticker in enumerate(symbols)}
+        source_id_list = []
+        target_id_list = []
+
+        for edge in edges:
+            source_ticker = edge[0]
+            target_ticker = edge[1]
+
+            source_id_list.append(ticker_to_id_map[source_ticker])
+            target_id_list.append(ticker_to_id_map[target_ticker])
+
+        return Tensor([source_id_list, target_id_list], device=device)
 
     def get_dataset(
         self,
@@ -262,7 +277,10 @@ class GraphManager:
         """
 
         # Build graph using the specified year range
-        start_date = pd.Timestamp(year=start_year, month=1, day=1)
+        start_date = max(
+            pd.Timestamp(year=start_year, month=1, day=1),
+            pd.Timestamp(year=self.start_year, month=1, day=1) + pd.DateOffset(years=1),
+        )
         end_date = pd.Timestamp(year=end_year, month=12, day=31)
 
         edges, _ = self.build_graph(start_date, end_date, price_column)
@@ -272,8 +290,10 @@ class GraphManager:
             return pd.DataFrame(), pd.DataFrame()
 
         # Create a mapping of ticker to index for both X and Y
-        unique_symbols = self.features["Symbol"].unique().tolist() # takes the global context into consideration
-        
+        unique_symbols = (
+            self.features["Symbol"].unique().tolist()
+        )  # takes the global context into consideration
+
         ticker_to_idx = {ticker: idx for idx, ticker in enumerate(unique_symbols)}
 
         # Prepare features dataframe with dates
@@ -321,7 +341,7 @@ class GraphManager:
                 target_curr_row = target_current.iloc[0]
 
                 # Build X: source's previous day features (all except Date, Symbol) + current day PCT-1
-                source_features = {
+                source_features: dict = {
                     col: source_prev_row[col]
                     for col in source_prev_row.index
                     if col not in ["Date", "Symbol"]
@@ -362,5 +382,6 @@ class GraphManager:
         path = Path(__file__).parent / "features_test_output.csv"
         self.features = pd.read_csv(path, index_col=0)
         self.features["Date"] = pd.to_datetime(self.features["Date"], format="mixed")
-        self.historical_prices = self.features[["Date", "Symbol", "Close", "High", "Low", "Open"]]
-        
+        self.historical_prices = self.features[
+            ["Date", "Symbol", "Close", "High", "Low", "Open"]
+        ]
