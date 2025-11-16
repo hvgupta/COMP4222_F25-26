@@ -3,6 +3,7 @@ from .feature_lists import *
 
 import pandas as pd
 from pathlib import Path
+from random import sample
 from pandas import Timestamp
 from itertools import combinations
 
@@ -129,15 +130,15 @@ class GraphManager:
     def _check_seen_symbols(self):
         output_file = Path(__file__).parent / "features_test_output.csv"
         if output_file.exists():
-            existing_features = pd.read_csv(output_file)
+            existing_features = pd.read_csv(output_file, index_col=0)  # Add index_col=0
             seen_symbols = existing_features["Symbol"].unique().tolist()
             self.company_df = self.company_df[
                 ~self.company_df["Symbol"].isin(seen_symbols)
             ]
             self.features = existing_features
-            print(f"Resuming from {len(seen_symbols)} seen symbols.")
+            logger.info(f"Resuming from {len(seen_symbols)} seen symbols.")
         else:
-            print("No existing features file found. Starting fresh.")
+            logger.info("No existing features file found. Starting fresh.")
 
     async def async_gather_features(self, batch_size: int = 10):
 
