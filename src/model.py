@@ -23,8 +23,8 @@ class TwoTowerSAGE(nn.Module):
         self.sage2_conv1 = SAGEConv(in_dim, hidden_dim)
         self.sage2_conv2 = SAGEConv(hidden_dim, out_dim)
 
-        self.ln1 = nn.LayerNorm(out_dim)
-        self.ln2 = nn.LayerNorm(out_dim)
+        self.bn1 = nn.BatchNorm1d(out_dim)
+        self.bn2 = nn.BatchNorm1d(out_dim)
 
         self.dropout = dropout
         self.embed_l2_reg = embed_l2_reg
@@ -34,14 +34,14 @@ class TwoTowerSAGE(nn.Module):
         x1 = F.relu(self.sage1_conv1(x, edge_index))
         x1 = F.dropout(x1, p=self.dropout, training=self.training)
         e1 = self.sage1_conv2(x1, edge_index)
-        e1 = self.ln1(e1)
+        e1 = self.bn1(e1)
         return e1  # [N, D]
 
     def encode_e2(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
         x2 = F.relu(self.sage2_conv1(x, edge_index))
         x2 = F.dropout(x2, p=self.dropout, training=self.training)
         e2 = self.sage2_conv2(x2, edge_index)
-        e2 = self.ln2(e2)
+        e2 = self.bn2(e2)
         return e2  # [N, D]
 
     def forward(
