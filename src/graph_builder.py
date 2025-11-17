@@ -2,6 +2,7 @@ from src.company_feature_functions import *
 from src.feature_lists import *
 
 import os
+import torch
 import numpy as np
 import pandas as pd
 from torch import Tensor
@@ -249,7 +250,7 @@ class GraphManager:
             source_id_list.append(ticker_to_id_map[source_ticker])
             target_id_list.append(ticker_to_id_map[target_ticker])
 
-        return Tensor([source_id_list, target_id_list], device=device)
+        return Tensor([source_id_list, target_id_list], device=device).to(dtype=torch.int)
 
     def get_dataset(
         self,
