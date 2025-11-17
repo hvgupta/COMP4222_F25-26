@@ -125,7 +125,7 @@ def save_model(model: TwoTowerSAGE, filepath: str):
 
 
 async def main():
-    model = await train_model(WINDOW_SIZE, CORRELATION_THRESHOLD)
+    model = await train_model(WINDOW_SIZE, CORRELATION_THRESHOLD, num_epoch=500)
     if model is None:
         raise ValueError("Something is wrong here")
 

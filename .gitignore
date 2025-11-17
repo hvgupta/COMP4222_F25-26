@@ -6,3 +6,5 @@
 **.log
 **features_test_output.csv
 **features.csv
+
+**.pth
