@@ -92,8 +92,6 @@ async def train_model(
             X_tensor, edge_index, src_idx_tensor, tgt_idx_tensor, src_pct_tensor
         )
         
-        print(y_hat)
-        
         logger.info(f"The predicted values are ")
 
         # Compute loss
