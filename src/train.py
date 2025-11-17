@@ -60,34 +60,28 @@ async def train_model(
 
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
+    X_train, Y_train = GM.get_dataset(edges, start_date, end_date, n_samples=5000)
+    # Convert full sampled dataset to tensors
+    X_tensor = torch.tensor(
+        X_train[ALL_FEATURES].values, dtype=torch.float32, device=device
+    )
+    Y_tensor = torch.tensor(
+        Y_train["target_PCT_1"].values, dtype=torch.float32, device=device
+    )
+    src_idx_tensor = torch.tensor(
+        X_train["source_node_idx"].values, dtype=torch.int64, device=device
+    )
+    tgt_idx_tensor = torch.tensor(
+        Y_train["target_node_idx"].values, dtype=torch.int64, device=device
+    )
+    src_pct_tensor = torch.tensor(
+        X_train["current_PCT_1"].values, dtype=torch.float32, device=device
+    )
+    
     # Training loop
     logger.info("Starting training loop...")
     for epoch in range(num_epoch):
         epoch_loss = 0.0
-
-        # sample a random batch-dataset for this epoch
-        X_train, Y_train = GM.get_dataset(edges, start_date, end_date, n_samples=5000)
-
-        if X_train.empty or Y_train.empty:
-            logger.error(f"Failed to generate training dataset at epoch {epoch}")
-            continue
-
-        # Convert full sampled dataset to tensors
-        X_tensor = torch.tensor(
-            X_train[ALL_FEATURES].values, dtype=torch.float32, device=device
-        )
-        Y_tensor = torch.tensor(
-            Y_train["target_PCT_1"].values, dtype=torch.float32, device=device
-        )
-        src_idx_tensor = torch.tensor(
-            X_train["source_node_idx"].values, dtype=torch.int64, device=device
-        )
-        tgt_idx_tensor = torch.tensor(
-            Y_train["target_node_idx"].values, dtype=torch.int64, device=device
-        )
-        src_pct_tensor = torch.tensor(
-            X_train["current_PCT_1"].values, dtype=torch.float32, device=device
-        )
 
         # Create DataLoader for minibatches
         dataset = TensorDataset(src_idx_tensor, tgt_idx_tensor, src_pct_tensor, Y_tensor)
