@@ -90,16 +90,16 @@ async def train_model(
         )
 
         # Create DataLoader for minibatches
-        dataset = TensorDataset(X_tensor, src_idx_tensor, tgt_idx_tensor, src_pct_tensor, Y_tensor)
+        dataset = TensorDataset(src_idx_tensor, tgt_idx_tensor, src_pct_tensor, Y_tensor)
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=False)
 
         num_batches = 0
         for batch in loader:
-            Xb, src_idx_b, tgt_idx_b, src_pct_b, Yb = batch
+            src_idx_b, tgt_idx_b, src_pct_b, Yb = batch
 
             optimizer.zero_grad()
             y_hat, E1, E2 = model(
-                Xb, edge_index, src_idx_b, tgt_idx_b, src_pct_b
+                X_tensor, edge_index, src_idx_b, tgt_idx_b, src_pct_b
             )
 
             # Compute loss (kept original scaling)
