@@ -74,7 +74,7 @@ async def train_model(
         Y_train["target_PCT_1"].values, dtype=torch.float32, device=device
     )
     src_idx_tensor = torch.tensor(
-        Y_train["source_node_idx"].values, dtype=torch.long, device=device
+        X_train["source_node_idx"].values, dtype=torch.long, device=device
     )
     tgt_idx_tensor = torch.tensor(
         Y_train["target_node_idx"].values, dtype=torch.long, device=device

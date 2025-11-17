@@ -307,7 +307,7 @@ class GraphManager:
         Y_samples = []
 
         # For each edge (source, target, corr)
-        for source_ticker, target_ticker, _ in edges:
+        for source_ticker, target_ticker in edges:
 
             if source_ticker not in ticker_to_idx or target_ticker not in ticker_to_idx:
                 continue
