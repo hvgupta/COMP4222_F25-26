@@ -398,6 +398,7 @@ class GraphManager:
             self.features["Date"] = pd.to_datetime(
                 self.features["Date"], format="mixed"
             )
+            self.features.dropna(inplace=True)
             self.historical_prices = self.features[
                 ["Date", "Symbol", "Close", "High", "Low", "Open"]
             ]
