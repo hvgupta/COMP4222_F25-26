@@ -1,6 +1,7 @@
-from .company_feature_functions import *
-from .feature_lists import *
+from src.company_feature_functions import *
+from src.feature_lists import *
 
+import os
 import numpy as np
 import pandas as pd
 from torch import Tensor
@@ -378,10 +379,13 @@ class GraphManager:
 
         return X_df, Y_df
 
-    def load_features_csv(self):
+    async def load_features_csv(self):
         path = Path(__file__).parent / "features.csv"
-        self.features = pd.read_csv(path, index_col=0)
-        self.features["Date"] = pd.to_datetime(self.features["Date"], format="mixed")
-        self.historical_prices = self.features[
-            ["Date", "Symbol", "Close", "High", "Low", "Open"]
-        ]
+        if os.path.exists(path):
+            self.features = pd.read_csv(path, index_col=0)
+            self.features["Date"] = pd.to_datetime(self.features["Date"], format="mixed")
+            self.historical_prices = self.features[
+                ["Date", "Symbol", "Close", "High", "Low", "Open"]
+            ]
+        else:
+            await self.async_gather_features()

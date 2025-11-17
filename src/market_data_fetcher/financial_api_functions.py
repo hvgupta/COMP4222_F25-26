@@ -8,9 +8,7 @@ import yfinance as yf
 from io import StringIO
 from typing import Dict
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-}
+HEADERS = {"User-Agent": "Mozilla/5.0 (Company info@company.com)"}
 
 
 def fetch_sp500_companies() -> pd.DataFrame:
@@ -67,7 +65,7 @@ async def fetch_ticker_historical_prices(
     if data is None or data.empty:
         logger.warning(f"No historical price data found for {ticker_symbol}")
         raise ValueError(f"No historical price data found for {ticker_symbol}")
-    
+
     data.reset_index(inplace=True)
     data["Date"] = pd.to_datetime(data["Date"])
 

@@ -1,4 +1,4 @@
-from .feature_lists import ALL_FEATURES
+from src.feature_lists import ALL_FEATURES
 
 import torch.nn as nn
 import torch.nn.functional as F

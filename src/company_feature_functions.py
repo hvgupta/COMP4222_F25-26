@@ -1,6 +1,6 @@
-from .logger import logger
-from .market_data_fetcher import *
-from .feature_lists import HISTORICAL_DATA_FEATURES
+from src.logger import logger
+from src.market_data_fetcher import *
+from src.feature_lists import HISTORICAL_DATA_FEATURES
 
 import talib
 import pandas as pd

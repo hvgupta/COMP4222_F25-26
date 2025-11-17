@@ -1,5 +1,5 @@
-from .logger import logger
-from .model import TwoTowerSAGE
+from src.logger import logger
+from src.model import TwoTowerSAGE
 
 import torch
 from torch.nn import MSELoss

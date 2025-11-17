@@ -1,4 +1,4 @@
-from ..logger import logger
+from src.logger import logger
 
 import pandas as pd
 from pandas import Timestamp

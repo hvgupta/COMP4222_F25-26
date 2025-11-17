@@ -1,5 +1,5 @@
-from .logger import logger
-from .graph_builder import (
+from src.logger import logger
+from src.graph_builder import (
     GraphManager,
     START_YEAR,
     END_YEAR,
@@ -46,7 +46,7 @@ async def train_model(
     GM = GraphManager(window_size=window_size, corr_threshold=corr_threshold)
 
     logger.info("Gathering company features (this may take a while)...")
-    await GM.async_gather_features()
+    await GM.load_features_csv()
     logger.info(f"Gathered features for {GM.features['Symbol'].nunique()} companies")
 
     # Build graph
