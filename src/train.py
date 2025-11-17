@@ -6,9 +6,9 @@ from src.graph_builder import (
     WINDOW_SIZE,
     CORRELATION_THRESHOLD,
 )
-from .model import TwoTowerSAGE
+from src.model import TwoTowerSAGE
+from src.feature_lists import ALL_FEATURES
 
-import pdb
 import torch
 import asyncio
 import torch.optim as optim
@@ -76,7 +76,7 @@ async def train_model(
             continue
 
         # Convert to tensors
-        X_tensor = torch.tensor(X_train.values, dtype=torch.float32, device=device)
+        X_tensor = torch.tensor(X_train[ALL_FEATURES].values, dtype=torch.float32, device=device)
         Y_tensor = torch.tensor(
             Y_train["target_PCT_1"].values, dtype=torch.float32, device=device
         )
