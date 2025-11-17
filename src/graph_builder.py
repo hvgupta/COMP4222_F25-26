@@ -44,7 +44,7 @@ class GraphManager:
         )
         # this is a subset of the features in order to make the process of creating the graphs easier
 
-        self.features = pd.DataFrame(columns=ALL_FEATURES)
+        self.features = pd.DataFrame(columns=["Date", "Symbol"] + ALL_FEATURES)
 
     def _conv_start_end_to_date(self, df: pd.DataFrame):
         df_columns = df.columns.tolist()
@@ -87,7 +87,7 @@ class GraphManager:
 
         company_concept = await fetch_sec_concepts(TICKER_TO_CIK_MAP[ticker])
 
-        company_features = pd.DataFrame(columns=ALL_FEATURES)
+        company_features = pd.DataFrame(columns=["Date", "Symbol"] + ALL_FEATURES)
 
         company_price_features = get_historical_price_features(ticker, prices)
         # company_price_features = company_price_features[]
@@ -233,14 +233,12 @@ class GraphManager:
         for i, j in combinations(symbols, 2):
             corr_val = avg_corr_matrix.loc[i, j]
             if pd.notna(corr_val) and corr_val >= self.corr_threshold:  # type: ignore
-                edges.append([i, j]) 
+                edges.append([i, j])
 
         return edges, avg_corr_matrix
 
     def create_edge_index_to_tensor(self, edges: list[list[str]], device):
-        symbols = list(
-            set([edge[0] for edge in edges] + [edge[1] for edge in edges])
-        )
+        symbols = list(set([edge[0] for edge in edges] + [edge[1] for edge in edges]))
         ticker_to_id_map = {ticker: idx for idx, ticker in enumerate(symbols)}
         source_id_list = []
         target_id_list = []
@@ -252,7 +250,9 @@ class GraphManager:
             source_id_list.append(ticker_to_id_map[source_ticker])
             target_id_list.append(ticker_to_id_map[target_ticker])
 
-        return Tensor([source_id_list, target_id_list], device=device).to(dtype=torch.int64)
+        return Tensor([source_id_list, target_id_list], device=device).to(
+            dtype=torch.int64
+        )
 
     def get_dataset(
         self,
@@ -386,7 +386,9 @@ class GraphManager:
         path = Path(__file__).parent / "features.csv"
         if os.path.exists(path):
             self.features = pd.read_csv(path, index_col=0)
-            self.features["Date"] = pd.to_datetime(self.features["Date"], format="mixed")
+            self.features["Date"] = pd.to_datetime(
+                self.features["Date"], format="mixed"
+            )
             self.historical_prices = self.features[
                 ["Date", "Symbol", "Close", "High", "Low", "Open"]
             ]
