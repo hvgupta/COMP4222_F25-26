@@ -15,7 +15,6 @@ class TwoTowerSAGE(nn.Module):
         dropout: float = 0.3,
         embed_l2_reg: float = 1e-4,
         normalize_embeddings: bool = True,
-        output_scale: float = 0.05,  # predicted pct will be in approx [-0.05, 0.05]
     ):
         super().__init__()
         self.sage1_conv1 = SAGEConv(in_dim, hidden_dim)
@@ -30,11 +29,6 @@ class TwoTowerSAGE(nn.Module):
         self.dropout = dropout
         self.embed_l2_reg = embed_l2_reg
         self.normalize_embeddings = normalize_embeddings
-
-        # learnable scale applied after tanh to give small numeric range
-        self.output_scale = nn.Parameter(torch.tensor(float(output_scale)))
-        # optional bias on prediction
-        self.output_bias = nn.Parameter(torch.tensor(0.0))
 
     def encode_e1(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
         x1 = F.relu(self.sage1_conv1(x, edge_index))
@@ -83,10 +77,7 @@ class TwoTowerSAGE(nn.Module):
         cond = e1_src * src_pct  # [B,D]
 
         # raw dot
-        raw = (cond * e2_tgt).sum(dim=-1)  # [B]
-
-        # # squash to bounded range; gives stable numeric range
-        y_hat = torch.tanh(raw + self.output_bias) * self.output_scale  # approx [-scale, +scale]
+        y_hat = (cond * e2_tgt).sum(dim=-1)  # [B]
 
         return y_hat, E1, E2
 

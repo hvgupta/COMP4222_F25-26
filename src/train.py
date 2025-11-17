@@ -67,7 +67,7 @@ async def train_model(
     )
     Y_tensor = torch.tensor(
         Y_train["target_PCT_1"].values, dtype=torch.float32, device=device
-    )
+    )*100
     src_idx_tensor = torch.tensor(
         X_train["source_node_idx"].values, dtype=torch.int64, device=device
     )
@@ -97,7 +97,7 @@ async def train_model(
             )
 
             # Compute loss (kept original scaling)
-            pred_loss = criterion(y_hat, Yb * 100)
+            pred_loss = criterion(y_hat, Yb)
 
             # embedding L2 regularization
             reg_loss = model.embedding_regularization(E1, E2)
@@ -105,7 +105,6 @@ async def train_model(
             loss = pred_loss + reg_loss
 
             loss.backward()
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
             epoch_loss += loss.item()
@@ -113,12 +112,10 @@ async def train_model(
 
         avg_epoch_loss = epoch_loss / (num_batches or 1)
         if (epoch + 1) % 10 == 0:
-            logger.info(f"Epoch {epoch + 1}/{num_epoch} - Avg Loss: {avg_epoch_loss:.6f} grad_norm={grad_norm:.4f}")
+            logger.info(f"Epoch {epoch + 1}/{num_epoch} - Avg Loss: {avg_epoch_loss:.6f}")
 
     logger.info("Training completed successfully")
     return model
-# ...existing code...
-
 
 def save_model(model: TwoTowerSAGE, filepath: str):
     """Save trained model to disk"""
