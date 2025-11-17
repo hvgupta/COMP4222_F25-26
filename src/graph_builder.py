@@ -250,7 +250,7 @@ class GraphManager:
 
         return edges, avg_corr_matrix
 
-    def create_edge_index_to_tensor(self, edges: list[list[str]], device):
+    def conv_edge_index_to_tensor(self, edges: list[list[str]], device):
         symbols = list(set([edge[0] for edge in edges] + [edge[1] for edge in edges]))
         ticker_to_id_map = {ticker: idx for idx, ticker in enumerate(symbols)}
         source_id_list = []
@@ -263,8 +263,9 @@ class GraphManager:
             source_id_list.append(ticker_to_id_map[source_ticker])
             target_id_list.append(ticker_to_id_map[target_ticker])
 
-        return Tensor([source_id_list, target_id_list], device=device).to(
-            dtype=torch.int64
+        return Tensor([source_id_list, target_id_list]).to(
+            dtype=torch.int64,
+            device=device
         )
 
     def get_dataset(

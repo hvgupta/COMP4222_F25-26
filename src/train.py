@@ -54,7 +54,7 @@ async def train_model(
     edges, _ = GM.build_graph(start_date, end_date, "Close") # type: ignore
     logger.info(f"Built graph with {len(edges)} edges")
 
-    edge_index = GM.create_edge_index_to_tensor(edges, device)
+    edge_index = GM.conv_edge_index_to_tensor(edges, device)
     logger.info(f"Edge index tensor created on device: {device}")
 
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
