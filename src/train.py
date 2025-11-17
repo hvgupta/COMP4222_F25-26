@@ -10,15 +10,17 @@ from src.feature_lists import ALL_FEATURES
 import torch
 import asyncio
 import torch.optim as optim
-from torch.nn import MSELoss
+from torch.nn import SmoothL1Loss
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-mse_loss = MSELoss()
+criterion = SmoothL1Loss(beta=0.01)  # robust loss for noisy finance data
+
 model = TwoTowerSAGE().to(device=device)
 
 
 # ...existing code...
+
 
 async def train_model(
     window_size: int,
@@ -35,9 +37,7 @@ async def train_model(
         num_epoch: Number of training epochs
         learning_rate: Learning rate for optimizer
     """
-    logger.info(
-        f"Starting model training: epochs={num_epoch}, lr={learning_rate}"
-    )
+    logger.info(f"Starting model training: epochs={num_epoch}, lr={learning_rate}")
 
     # Initialize GraphManager and gather features
     GM = GraphManager(window_size=window_size, corr_threshold=corr_threshold)
@@ -51,7 +51,7 @@ async def train_model(
     if start_date is None or end_date is None:
         raise ValueError("Something is wrong")
 
-    edges, _ = GM.build_graph(start_date, end_date, "Close") # type: ignore
+    edges, _ = GM.build_graph(start_date, end_date, "Close")  # type: ignore
     logger.info(f"Built graph with {len(edges)} edges")
 
     edge_index = GM.conv_edge_index_to_tensor(edges, device)
@@ -72,15 +72,17 @@ async def train_model(
             continue
 
         # Convert to tensors
-        X_tensor = torch.tensor(X_train[ALL_FEATURES].values, dtype=torch.float32, device=device)
+        X_tensor = torch.tensor(
+            X_train[ALL_FEATURES].values, dtype=torch.float32, device=device
+        )
         Y_tensor = torch.tensor(
             Y_train["target_PCT_1"].values, dtype=torch.float32, device=device
         )
         src_idx_tensor = torch.tensor(
-            X_train["source_node_idx"].values, dtype=torch.int64, device=device  
+            X_train["source_node_idx"].values, dtype=torch.int64, device=device
         )
         tgt_idx_tensor = torch.tensor(
-            Y_train["target_node_idx"].values, dtype=torch.int64, device=device  
+            Y_train["target_node_idx"].values, dtype=torch.int64, device=device
         )
         src_pct_tensor = torch.tensor(
             X_train["current_PCT_1"].values, dtype=torch.float32, device=device
@@ -88,14 +90,20 @@ async def train_model(
 
         # Forward pass
         optimizer.zero_grad()
-        y_hat, _, _ = model(
+        y_hat, E1, E2 = model(
             X_tensor, edge_index, src_idx_tensor, tgt_idx_tensor, src_pct_tensor
         )
-        
+
         logger.info(f"The predicted values are ")
 
         # Compute loss
-        loss = mse_loss(y_hat, Y_tensor)
+        # main prediction loss
+        pred_loss = criterion(y_hat, Y_tensor)
+
+        # embedding L2 regularization
+        reg_loss = model.embedding_regularization(E1, E2)
+
+        loss = pred_loss + reg_loss
 
         # Backward pass
         loss.backward()
@@ -116,11 +124,11 @@ def save_model(model: TwoTowerSAGE, filepath: str):
     logger.info(f"Model saved to {filepath}")
 
 
-async def main(): 
+async def main():
     model = await train_model(WINDOW_SIZE, CORRELATION_THRESHOLD)
     if model is None:
         raise ValueError("Something is wrong here")
-    
+
     save_model(model, "./corr_model.pth")
 
 
