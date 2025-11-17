@@ -9,6 +9,7 @@ from torch import Tensor
 from pathlib import Path
 from pandas import Timestamp
 from itertools import combinations
+from typing import Optional, Tuple
 
 # ======= HYPER-PARAMETERS ======
 
@@ -64,8 +65,8 @@ class GraphManager:
                     [expanded_df, pd.DataFrame([new_row])], ignore_index=True
                 )
         return expanded_df
-    
-    def get_valid_date_range(self):
+
+    def get_valid_date_range(self)-> Tuple[Optional[pd.Timestamp], Optional[pd.Timestamp]]:
         df = self.features.copy()
         feature_cols = [col for col in df.columns if col != "Date"]
         valid_rows = df[df[feature_cols].notna().all(axis=1)]
@@ -266,7 +267,13 @@ class GraphManager:
             dtype=torch.int64
         )
 
-    def get_dataset(self, edges, n_samples: int = 1000):
+    def get_dataset(
+        self,
+        edges,
+        start_date: pd.Timestamp,
+        end_date: pd.Timestamp,
+        n_samples: int = 1000,
+    ):
         """
         Generate training dataset for edge prediction.
 
@@ -285,6 +292,9 @@ class GraphManager:
             Y (pd.DataFrame): Target for training
                 - Columns: target node's current day PCT-1 + target_node_idx
         """
+        
+        def within_range(df):
+            return (df["Date"] >= start_date) & (df["Date"] <= end_date)
 
         if not edges:
             logger.warning("No edges found in graph. Cannot generate dataset.")
@@ -300,6 +310,8 @@ class GraphManager:
         # Prepare features dataframe with dates
         features_with_dates = self.features.copy()
         features_with_dates["Date"] = pd.to_datetime(features_with_dates["Date"])
+        features_with_dates[within_range(features_with_dates)] = features_with_dates
+        
         features_with_dates = features_with_dates.sort_values("Date").reset_index(
             drop=True
         )

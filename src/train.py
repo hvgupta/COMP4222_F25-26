@@ -1,8 +1,6 @@
 from src.logger import logger
 from src.graph_builder import (
     GraphManager,
-    START_YEAR,
-    END_YEAR,
     WINDOW_SIZE,
     CORRELATION_THRESHOLD,
 )
@@ -12,7 +10,6 @@ from src.feature_lists import ALL_FEATURES
 import torch
 import asyncio
 import torch.optim as optim
-from pandas import Timestamp
 from torch.nn import MSELoss
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -51,6 +48,8 @@ async def train_model(
 
     # Build graph
     start_date, end_date = GM.get_valid_date_range()
+    if start_date is None or end_date is None:
+        raise ValueError("Something is wrong")
 
     edges, _ = GM.build_graph(start_date, end_date, "Close") # type: ignore
     logger.info(f"Built graph with {len(edges)} edges")
@@ -66,7 +65,7 @@ async def train_model(
         epoch_loss = 0.0
 
         # Generate dataset (already randomly sampled)
-        X_train, Y_train = GM.get_dataset(edges, n_samples=1000)
+        X_train, Y_train = GM.get_dataset(edges, start_date, end_date, n_samples=1000)
 
         if X_train.empty or Y_train.empty:
             logger.error(f"Failed to generate training dataset at epoch {epoch}")
@@ -92,6 +91,8 @@ async def train_model(
         y_hat, _, _ = model(
             X_tensor, edge_index, src_idx_tensor, tgt_idx_tensor, src_pct_tensor
         )
+        
+        print(y_hat)
         
         logger.info(f"The predicted values are ")
 
