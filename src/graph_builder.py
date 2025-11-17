@@ -252,7 +252,7 @@ class GraphManager:
             source_id_list.append(ticker_to_id_map[source_ticker])
             target_id_list.append(ticker_to_id_map[target_ticker])
 
-        return Tensor([source_id_list, target_id_list], device=device).to(dtype=torch.int)
+        return Tensor([source_id_list, target_id_list], device=device).to(dtype=torch.int64)
 
     def get_dataset(
         self,
