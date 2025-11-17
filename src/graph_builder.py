@@ -238,7 +238,9 @@ class GraphManager:
         return edges, avg_corr_matrix
 
     def create_edge_index_to_tensor(self, edges: list[list[str]], device):
-        symbols = self.company_df["Symbol"].unique().tolist()
+        symbols = list(
+            set([edge[0] for edge in edges] + [edge[1] for edge in edges])
+        )
         ticker_to_id_map = {ticker: idx for idx, ticker in enumerate(symbols)}
         source_id_list = []
         target_id_list = []
