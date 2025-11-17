@@ -15,10 +15,10 @@ import torch.optim as optim
 from pandas import Timestamp
 from torch.nn import MSELoss
 
-mse_loss = MSELoss()
-model = TwoTowerSAGE()
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+mse_loss = MSELoss()
+model = TwoTowerSAGE().to(device=device)
 
 
 # ...existing code...
@@ -50,17 +50,14 @@ async def train_model(
     logger.info(f"Loaded features for {GM.features['Symbol'].nunique()} companies")
 
     # Build graph
-    start_date = Timestamp(year=START_YEAR, month=1, day=1)
-    end_date = Timestamp(year=END_YEAR-1, month=12, day=31)
+    start_date, end_date = GM.get_valid_date_range()
 
-    edges, _ = GM.build_graph(start_date, end_date, "Close")
+    edges, _ = GM.build_graph(start_date, end_date, "Close") # type: ignore
     logger.info(f"Built graph with {len(edges)} edges")
 
     edge_index = GM.create_edge_index_to_tensor(edges, device)
     logger.info(f"Edge index tensor created on device: {device}")
 
-    # Move model to device
-    model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
     # Training loop
@@ -69,7 +66,7 @@ async def train_model(
         epoch_loss = 0.0
 
         # Generate dataset (already randomly sampled)
-        X_train, Y_train = GM.get_dataset(START_YEAR, END_YEAR, n_samples=5000)
+        X_train, Y_train = GM.get_dataset(edges, n_samples=1000)
 
         if X_train.empty or Y_train.empty:
             logger.error(f"Failed to generate training dataset at epoch {epoch}")

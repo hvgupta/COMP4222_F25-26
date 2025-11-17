@@ -64,6 +64,18 @@ class GraphManager:
                     [expanded_df, pd.DataFrame([new_row])], ignore_index=True
                 )
         return expanded_df
+    
+    def get_valid_date_range(self):
+        df = self.features.copy()
+        feature_cols = [col for col in df.columns if col != "Date"]
+        valid_rows = df[df[feature_cols].notna().all(axis=1)]
+
+        if valid_rows.empty:
+            return None, None  # or raise an error
+
+        earliest = valid_rows["Date"].min()
+        latest = valid_rows["Date"].max()
+        return earliest, latest
 
     def _merge_into_company_features(
         self,
@@ -254,13 +266,7 @@ class GraphManager:
             dtype=torch.int64
         )
 
-    def get_dataset(
-        self,
-        start_year: int,
-        end_year: int,
-        n_samples: int = 1000,
-        price_column: str = "Close",
-    ):
+    def get_dataset(self, edges, n_samples: int = 1000):
         """
         Generate training dataset for edge prediction.
 
@@ -279,15 +285,6 @@ class GraphManager:
             Y (pd.DataFrame): Target for training
                 - Columns: target node's current day PCT-1 + target_node_idx
         """
-
-        # Build graph using the specified year range
-        start_date = max(
-            pd.Timestamp(year=start_year, month=1, day=1),
-            pd.Timestamp(year=self.start_year, month=1, day=1) + pd.DateOffset(years=1),
-        )
-        end_date = pd.Timestamp(year=end_year, month=12, day=31)
-
-        edges, _ = self.build_graph(start_date, end_date, price_column)
 
         if not edges:
             logger.warning("No edges found in graph. Cannot generate dataset.")
