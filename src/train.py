@@ -11,6 +11,7 @@ import torch
 import asyncio
 import torch.optim as optim
 from torch.nn import MSELoss, HuberLoss
+from torch.utils.data import TensorDataset, DataLoader
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -19,11 +20,13 @@ model = TwoTowerSAGE().to(device=device)
 
 logger.info(f"The device being used is: {device.type}")
 
+
 async def train_model(
     window_size: int,
     corr_threshold: float,
     num_epoch: int = 100,
     learning_rate: float = 0.001,
+    batch_size: int = 128,
 ):
     """
     Train the TwoTowerSAGE model on stock price prediction.
@@ -33,8 +36,9 @@ async def train_model(
         corr_threshold: Minimum correlation for edges
         num_epoch: Number of training epochs
         learning_rate: Learning rate for optimizer
+        batch_size: minibatch size for training
     """
-    logger.info(f"Starting model training: epochs={num_epoch}, lr={learning_rate}")
+    logger.info(f"Starting model training: epochs={num_epoch}, lr={learning_rate}, batch_size={batch_size}")
 
     # Initialize GraphManager and gather features
     GM = GraphManager(window_size=window_size, corr_threshold=corr_threshold)
@@ -61,14 +65,14 @@ async def train_model(
     for epoch in range(num_epoch):
         epoch_loss = 0.0
 
-        # Generate dataset (already randomly sampled)
-        X_train, Y_train = GM.get_dataset(edges, start_date, end_date, n_samples=1000)
+        # sample a random batch-dataset for this epoch
+        X_train, Y_train = GM.get_dataset(edges, start_date, end_date, n_samples=5000)
 
         if X_train.empty or Y_train.empty:
             logger.error(f"Failed to generate training dataset at epoch {epoch}")
             continue
 
-        # Convert to tensors
+        # Convert full sampled dataset to tensors
         X_tensor = torch.tensor(
             X_train[ALL_FEATURES].values, dtype=torch.float32, device=device
         )
@@ -85,35 +89,41 @@ async def train_model(
             X_train["current_PCT_1"].values, dtype=torch.float32, device=device
         )
 
-        # Forward pass
-        optimizer.zero_grad()
-        y_hat, E1, E2 = model(
-            X_tensor, edge_index, src_idx_tensor, tgt_idx_tensor, src_pct_tensor
-        )
+        # Create DataLoader for minibatches
+        dataset = TensorDataset(X_tensor, src_idx_tensor, tgt_idx_tensor, src_pct_tensor, Y_tensor)
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=False)
 
-        logger.info(f"The predicted values are ")
+        num_batches = 0
+        for batch in loader:
+            Xb, src_idx_b, tgt_idx_b, src_pct_b, Yb = batch
 
-        # Compute loss
-        # main prediction loss
-        pred_loss = criterion(y_hat, Y_tensor*100)
+            optimizer.zero_grad()
+            y_hat, E1, E2 = model(
+                Xb, edge_index, src_idx_b, tgt_idx_b, src_pct_b
+            )
 
-        # embedding L2 regularization
-        reg_loss = model.embedding_regularization(E1, E2)
+            # Compute loss (kept original scaling)
+            pred_loss = criterion(y_hat, Yb * 100)
 
-        loss = pred_loss + reg_loss
+            # embedding L2 regularization
+            reg_loss = model.embedding_regularization(E1, E2)
 
-        # Backward pass
-        loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
+            loss = pred_loss + reg_loss
 
-        epoch_loss = loss.item()
+            loss.backward()
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
 
+            epoch_loss += loss.item()
+            num_batches += 1
+
+        avg_epoch_loss = epoch_loss / (num_batches or 1)
         if (epoch + 1) % 10 == 0:
-            logger.info(f"Epoch {epoch + 1}/{num_epoch} - Loss: {epoch_loss:.6f}")
+            logger.info(f"Epoch {epoch + 1}/{num_epoch} - Avg Loss: {avg_epoch_loss:.6f} grad_norm={grad_norm:.4f}")
 
     logger.info("Training completed successfully")
     return model
+# ...existing code...
 
 
 def save_model(model: TwoTowerSAGE, filepath: str):
