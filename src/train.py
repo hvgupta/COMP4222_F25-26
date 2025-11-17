@@ -51,7 +51,7 @@ async def train_model(
 
     # Build graph
     start_date = Timestamp(year=START_YEAR, month=1, day=1)
-    end_date = Timestamp(year=END_YEAR, month=12, day=31)
+    end_date = Timestamp(year=END_YEAR-1, month=12, day=31)
 
     edges, _ = GM.build_graph(start_date, end_date, "Close")
     logger.info(f"Built graph with {len(edges)} edges")
@@ -95,6 +95,8 @@ async def train_model(
         y_hat, _, _ = model(
             X_tensor, edge_index, src_idx_tensor, tgt_idx_tensor, src_pct_tensor
         )
+        
+        logger.info(f"The predicted values are ")
 
         # Compute loss
         loss = mse_loss(y_hat, Y_tensor)
