@@ -8,7 +8,7 @@ from src.graph_builder import (
 )
 from .model import TwoTowerSAGE
 
-
+import pdb
 import torch
 import asyncio
 import torch.optim as optim
@@ -21,11 +21,12 @@ model = TwoTowerSAGE()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+# ...existing code...
+
 async def train_model(
     window_size: int,
     corr_threshold: float,
     num_epoch: int = 100,
-    batch_size: int = 32,
     learning_rate: float = 0.001,
 ):
     """
@@ -35,19 +36,18 @@ async def train_model(
         window_size: Rolling window size for correlation
         corr_threshold: Minimum correlation for edges
         num_epoch: Number of training epochs
-        batch_size: Batch size for training
         learning_rate: Learning rate for optimizer
     """
     logger.info(
-        f"Starting model training: epochs={num_epoch}, lr={learning_rate}, batch_size={batch_size}"
+        f"Starting model training: epochs={num_epoch}, lr={learning_rate}"
     )
 
     # Initialize GraphManager and gather features
     GM = GraphManager(window_size=window_size, corr_threshold=corr_threshold)
 
-    logger.info("Gathering company features (this may take a while)...")
+    logger.info("Loading company features...")
     await GM.load_features_csv()
-    logger.info(f"Gathered features for {GM.features['Symbol'].nunique()} companies")
+    logger.info(f"Loaded features for {GM.features['Symbol'].nunique()} companies")
 
     # Build graph
     start_date = Timestamp(year=START_YEAR, month=1, day=1)
@@ -59,30 +59,6 @@ async def train_model(
     edge_index = GM.create_edge_index_to_tensor(edges, device)
     logger.info(f"Edge index tensor created on device: {device}")
 
-    # Generate dataset
-    X_train, Y_train = GM.get_dataset(START_YEAR, END_YEAR, n_samples=5000)
-
-    if X_train.empty or Y_train.empty:
-        logger.error("Failed to generate training dataset")
-        return None
-
-    logger.info(f"Generated training dataset with {len(X_train)} samples")
-
-    # Convert to tensors
-    X_tensor = torch.tensor(X_train.values, dtype=torch.float32, device=device)
-    Y_tensor = torch.tensor(
-        Y_train["target_PCT_1"].values, dtype=torch.float32, device=device
-    )
-    src_idx_tensor = torch.tensor(
-        X_train["source_node_idx"].values, dtype=torch.long, device=device
-    )
-    tgt_idx_tensor = torch.tensor(
-        Y_train["target_node_idx"].values, dtype=torch.long, device=device
-    )
-    src_pct_tensor = torch.tensor(
-        X_train["current_PCT_1"].values, dtype=torch.float32, device=device
-    )
-
     # Move model to device
     model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -91,42 +67,46 @@ async def train_model(
     logger.info("Starting training loop...")
     for epoch in range(num_epoch):
         epoch_loss = 0.0
-        num_batches = 0
 
-        # Shuffle indices
-        shuffled_indices = torch.randperm(len(X_tensor))
+        # Generate dataset (already randomly sampled)
+        X_train, Y_train = GM.get_dataset(START_YEAR, END_YEAR, n_samples=5000)
 
-        for batch_start in range(0, len(X_tensor), batch_size):
-            batch_end = min(batch_start + batch_size, len(X_tensor))
-            batch_indices = shuffled_indices[batch_start:batch_end]
+        if X_train.empty or Y_train.empty:
+            logger.error(f"Failed to generate training dataset at epoch {epoch}")
+            continue
 
-            # Get batch data
-            X_batch = X_tensor[batch_indices]
-            Y_batch = Y_tensor[batch_indices]
-            src_idx_batch = src_idx_tensor[batch_indices]
-            tgt_idx_batch = tgt_idx_tensor[batch_indices]
-            src_pct_batch = src_pct_tensor[batch_indices]
+        # Convert to tensors
+        X_tensor = torch.tensor(X_train.values, dtype=torch.float32, device=device)
+        Y_tensor = torch.tensor(
+            Y_train["target_PCT_1"].values, dtype=torch.float32, device=device
+        )
+        src_idx_tensor = torch.tensor(
+            X_train["source_node_idx"].values, dtype=torch.long, device=device
+        )
+        tgt_idx_tensor = torch.tensor(
+            Y_train["target_node_idx"].values, dtype=torch.long, device=device
+        )
+        src_pct_tensor = torch.tensor(
+            X_train["current_PCT_1"].values, dtype=torch.float32, device=device
+        )
 
-            # Forward pass
-            optimizer.zero_grad()
-            y_hat, _, _ = model(
-                X_batch, edge_index, src_idx_batch, tgt_idx_batch, src_pct_batch
-            )
+        # Forward pass
+        optimizer.zero_grad()
+        y_hat, _, _ = model(
+            X_tensor, edge_index, src_idx_tensor, tgt_idx_tensor, src_pct_tensor
+        )
 
-            # Compute loss
-            loss = mse_loss(y_hat, Y_batch)
+        # Compute loss
+        loss = mse_loss(y_hat, Y_tensor)
 
-            # Backward pass
-            loss.backward()
-            optimizer.step()
+        # Backward pass
+        loss.backward()
+        optimizer.step()
 
-            epoch_loss += loss.item()
-            num_batches += 1
-
-        avg_epoch_loss = epoch_loss / num_batches
+        epoch_loss = loss.item()
 
         if (epoch + 1) % 10 == 0:
-            logger.info(f"Epoch {epoch + 1}/{num_epoch} - Loss: {avg_epoch_loss:.6f}")
+            logger.info(f"Epoch {epoch + 1}/{num_epoch} - Loss: {epoch_loss:.6f}")
 
     logger.info("Training completed successfully")
     return model

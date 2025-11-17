@@ -4,7 +4,6 @@ from src.model import TwoTowerSAGE
 import torch
 from torch.nn import MSELoss
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 mse_loss = MSELoss()
 
 def evaluate_model(model: TwoTowerSAGE, X_test, Y_test, edge_index, device):
