@@ -15,12 +15,9 @@ from torch.nn import SmoothL1Loss
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 criterion = SmoothL1Loss(beta=0.01)  # robust loss for noisy finance data
-
 model = TwoTowerSAGE().to(device=device)
 
-
-# ...existing code...
-
+logger.info(f"The device being used is: {device.type}")
 
 async def train_model(
     window_size: int,
