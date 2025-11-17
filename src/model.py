@@ -15,7 +15,7 @@ class TwoTowerSAGE(nn.Module):
         both are combined together (using dot product for now) 
         the objective is to minimize the difference between the dot product and the actual pct change of the trget stock
     """
-    def __init__(self, in_dim = NUM_FEATURES, hidden_dim=64, out_dim=32, dropout=0.2):
+    def __init__(self, in_dim = len(ALL_FEATURES), hidden_dim=64, out_dim=32, dropout=0.2):
         super().__init__()
         
         self.sage1_conv1 = SAGEConv(in_dim, hidden_dim)
