@@ -345,7 +345,7 @@ class GraphManager:
                 current_date = source_data.iloc[i]["Date"]
 
                 # Get target data for current date
-                target_current = target_data[target_data["Date"] == current_date]
+                target_current = target_data[target_data["Date"] == (current_date + pd.Timedelta(days=1))]
 
                 if target_current.empty:
                     continue
