@@ -10,11 +10,11 @@ from src.feature_lists import ALL_FEATURES
 import torch
 import asyncio
 import torch.optim as optim
-from torch.nn import MSELoss
+from torch.nn import MSELoss, HuberLoss
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-criterion = MSELoss()  # robust loss for noisy finance data
+criterion = HuberLoss(delta=0.05)  # robust loss for noisy finance data
 model = TwoTowerSAGE().to(device=device)
 
 logger.info(f"The device being used is: {device.type}")
@@ -95,7 +95,7 @@ async def train_model(
 
         # Compute loss
         # main prediction loss
-        pred_loss = criterion(y_hat*100, Y_tensor*100)
+        pred_loss = criterion(y_hat, Y_tensor*100)
 
         # embedding L2 regularization
         reg_loss = model.embedding_regularization(E1, E2)
@@ -104,6 +104,7 @@ async def train_model(
 
         # Backward pass
         loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         epoch_loss = loss.item()

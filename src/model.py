@@ -86,9 +86,9 @@ class TwoTowerSAGE(nn.Module):
         raw = (cond * e2_tgt).sum(dim=-1)  # [B]
 
         # # squash to bounded range; gives stable numeric range
-        # y_hat = torch.tanh(raw + self.output_bias) * self.output_scale  # approx [-scale, +scale]
+        y_hat = torch.tanh(raw + self.output_bias) * self.output_scale  # approx [-scale, +scale]
 
-        return raw, E1, E2
+        return y_hat, E1, E2
 
     def embedding_regularization(self, E1: torch.Tensor, E2: torch.Tensor) -> torch.Tensor:
         """Return L2 regularization term for embeddings (scalar)."""
