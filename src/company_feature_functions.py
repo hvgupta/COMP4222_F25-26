@@ -1,13 +1,15 @@
 from src.logger import logger
-from src.market_data_fetcher import *
+from src.market_data_fetcher import (
+    extract_quarterly_data,
+    SKIPException,
+    clean_instance_tables,
+    clean_period_table,
+)
 from src.feature_lists import HISTORICAL_DATA_FEATURES
+
 
 import talib
 import pandas as pd
-
-
-class SKIPException(Exception):
-    pass
 
 
 def _price_align_and_compute_ratio(
@@ -56,8 +58,8 @@ async def get_PE_ratio_data(
         company_facts, "EarningsPerShareBasic", "USD/shares"
     )
     if eps_table.empty:
-        logger.warning(f"No EPS data found for {ticker}")
-        return pd.DataFrame()
+        raise SKIPException("eps_table is empty")
+
     eps_table = eps_table.copy()
     # ensure datetime types
 
@@ -119,7 +121,12 @@ async def get_PB_ratio_data(
             continue
 
     if standardised_shares is None or standardised_shares.empty:
-        raise SKIPException(f"No valid shares data found for {ticker}")
+        raise SKIPException(
+            f"standardised_shares is {'None' if standardised_shares is None else 'empty'}"
+        )
+
+    if equity_table.empty:
+        raise SKIPException("equity_table is empty")
 
     standardised_equity = clean_instance_tables(
         equity_table,
@@ -165,6 +172,11 @@ async def get_roa_data(
     net_df = await extract_quarterly_data(company_facts, "NetIncomeLoss", "USD")
     assets_df = await extract_quarterly_data(company_facts, "Assets", "USD")
 
+    if net_df.empty:
+        raise SKIPException("net_df is empty")
+    if assets_df.empty:
+        raise SKIPException("assets_df is empty")
+
     net_df["start"] = pd.to_datetime(net_df["start"], errors="coerce")  # type: ignore
     net_df["end"] = pd.to_datetime(net_df["end"], errors="coerce")  # type: ignore
     assets_df["end"] = pd.to_datetime(assets_df["end"], errors="coerce")  # type: ignore
@@ -207,6 +219,11 @@ async def get_current_ratio_data(
     liab_current_df = await extract_quarterly_data(
         company_facts, "LiabilitiesCurrent", "USD"
     )
+
+    if assets_current_df.empty:
+        raise SKIPException("assests_current_df is empty")
+    if liab_current_df.empty:
+        raise SKIPException("liab_current_df is empty")
 
     assets_current_df["end"] = pd.to_datetime(assets_current_df["end"], errors="coerce")  # type: ignore
     liab_current_df["end"] = pd.to_datetime(liab_current_df["end"], errors="coerce")  # type: ignore
@@ -268,7 +285,7 @@ def get_historical_price_features(ticker: str, ticker_price_data: pd.DataFrame):
     natr15 = talib.NATR(high_numpy, low_numpy, close_numpy, timeperiod=15)
     natr20 = talib.NATR(high_numpy, low_numpy, close_numpy, timeperiod=20)
 
-    price_features_df["Date"] = price_df.index
+    price_features_df["Date"] = price_df["Date"]
 
     price_features_df["PCT-1"] = pct1
     price_features_df["PCT-5"] = pct5
@@ -317,11 +334,9 @@ async def get_profit_margin_data(
     )
 
     if net_df.empty:
-        logger.warning(f"No NetIncomeLoss data for {ticker}")
-        return pd.DataFrame()
+        raise SKIPException("net_df is empty")
     if revenue_df.empty:
-        logger.warning(f"No Revenues data for {ticker}")
-        return pd.DataFrame()
+        raise SKIPException("revenue_df is empty")
 
     # normalize datetimes
     net_df["start"] = pd.to_datetime(net_df["start"], errors="coerce")  # type: ignore

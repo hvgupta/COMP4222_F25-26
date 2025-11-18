@@ -31,17 +31,17 @@ class TwoTowerSAGE(nn.Module):
         self.normalize_embeddings = normalize_embeddings
 
     def encode_e1(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
-        x1 = F.relu(self.sage1_conv1(x, edge_index))
+        sage1_conv1_o = self.sage1_conv1(x,edge_index)
+        x1 = F.relu(self.bn1(sage1_conv1_o))
         x1 = F.dropout(x1, p=self.dropout, training=self.training)
         e1 = self.sage1_conv2(x1, edge_index)
-        e1 = self.bn1(e1)
         return e1  # [N, D]
 
     def encode_e2(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
-        x2 = F.relu(self.sage2_conv1(x, edge_index))
+        sage2_conv1_o = self.sage2_conv1(x, edge_index)
+        x2 = F.relu(self.bn2(sage2_conv1_o))
         x2 = F.dropout(x2, p=self.dropout, training=self.training)
         e2 = self.sage2_conv2(x2, edge_index)
-        e2 = self.bn2(e2)
         return e2  # [N, D]
 
     def forward(
