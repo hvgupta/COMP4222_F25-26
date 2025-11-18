@@ -172,7 +172,7 @@ def clean_instance_tables(
         raise SKIPException("No data found in instance table after filtering")
 
     for year in range(start_year, end_year + 1):
-        for quarter in ["Q1", "Q2", "Q3", "Q4", "FY"]:
+        for quarter in ["Q1", "Q2", "Q3", "Q4"]:
             if not filtered_instance.query(
                 f"end.dt.year == {year} and fp == '{quarter}'"
             ).empty:

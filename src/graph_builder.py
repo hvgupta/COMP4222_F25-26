@@ -8,14 +8,14 @@ from src.feature_lists import (
     ALL_SECTORS_FEATURES,
     CUR_PRICE_FEATURES,
     ALL_GICS_SECTORS,
-    CURRENT_FEATURES
+    CURRENT_FEATURES,
 )
 from src.market_data_fetcher import (
     SKIPException,
     SP500_COMPANIES,
     TICKER_TO_CIK_MAP,
     fetch_ticker_historical_prices,
-    fetch_sec_concepts
+    fetch_sec_concepts,
 )
 from src.company_feature_functions import (
     get_historical_price_features,
@@ -23,12 +23,11 @@ from src.company_feature_functions import (
     get_PE_ratio_data,
     get_roa_data,
     get_current_ratio_data,
-    get_one_hot_sector
+    get_one_hot_sector,
 )
 
 import os
 import torch
-import asyncio
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -62,7 +61,7 @@ class GraphManager:
     ):
         self.window_size = window_size
         self.corr_threshold = corr_threshold
-        self.start_year = start_year
+        self.start_year = start_year - 1
         self.end_year = end_year
         self.company_df = company_df
         self.historical_prices = pd.DataFrame(
@@ -116,13 +115,25 @@ class GraphManager:
         columns: list[str],
     ):
         expanded_df = self._conv_start_end_to_date(actual_info)
-        company_features[columns] = expanded_df[
-            expanded_df["Date"].isin(company_features["Date"])
-        ][columns].reset_index(drop=True)
+        merged_df = pd.merge(
+            company_features,
+            expanded_df[["Date"] + columns],
+            how="left",
+            on="Date",
+            suffixes=("_old", "_new"),
+        )
 
-        company_features.dropna(inplace=True, subset=columns)
+        merged_df = merged_df.drop(
+            labels=[col for col in merged_df.columns if col.endswith("_old")], axis=1
+        )
 
-        return company_features
+        merged_df = merged_df.rename(
+            {col: col[:-4] for col in merged_df.columns if col.endswith("_new")}, axis=1
+        )
+        
+        merged_df["Date"] = pd.to_datetime(merged_df["Date"])
+
+        return merged_df
 
     async def _extract_company_info(
         self, row: pd.Series, start_date_str: str, end_date_str: str
@@ -134,7 +145,9 @@ class GraphManager:
         try:
             company_concept = await fetch_sec_concepts(TICKER_TO_CIK_MAP[ticker])
         except Exception as e:
-            logger.error(f"Got the error while extract sec concepts for ticker: {ticker}, got error: {e}")
+            logger.error(
+                f"Got the error while extract sec concepts for ticker: {ticker}, got error: {e}"
+            )
             return None, None
 
         company_features = pd.DataFrame(columns=["Date", "Symbol"] + ALL_FEATURES)
@@ -175,7 +188,9 @@ class GraphManager:
             logger.error(f"The skip error has been raised for ticker {ticker}: {e}")
             return None, None
         except Exception as e:
-            logger.error(logger.error(f"An error has been raised for ticker {ticker}: {e}"))
+            logger.error(
+                logger.error(f"An error has been raised for ticker {ticker}: {e}")
+            )
             raise
 
         company_features["Symbol"] = ticker
@@ -188,6 +203,13 @@ class GraphManager:
 
         prices["Symbol"] = ticker
 
+        logger.info(
+            f"the current ticker is {ticker}, company features is {'empty' if company_features.empty else 'not empty'}"
+        )
+        logger.info(
+            f"the current ticker is {ticker}, company features is {'None' if company_features.isna().values.all() else 'not None'}"
+        )
+
         return company_features, prices
 
     def _check_seen_symbols(self):
@@ -195,6 +217,7 @@ class GraphManager:
         if output_file.exists():
             existing_features = pd.read_csv(output_file, index_col=0)  # Add index_col=0
             seen_symbols = existing_features["Symbol"].unique().tolist()
+            print(seen_symbols)
             self.company_df = self.company_df[
                 ~self.company_df["Symbol"].isin(seen_symbols)
             ]
@@ -203,7 +226,7 @@ class GraphManager:
         else:
             logger.info("No existing features file found. Starting fresh.")
 
-    async def async_gather_features(self, batch_size: int = 10):
+    async def async_gather_features(self):
 
         self._check_seen_symbols()
 
@@ -213,32 +236,29 @@ class GraphManager:
         start_date_str = start_date.strftime("%Y-%m-%d")
         end_date_str = end_date.strftime("%Y-%m-%d")
 
-        all_feature_tasks = [
-            self._extract_company_info(row, start_date_str, end_date_str)
-            for _, row in self.company_df.iterrows()
-        ]
-
-        print("all task are ", len(all_feature_tasks))
-
-        for i in range(0, len(all_feature_tasks), batch_size):
-            batch_tasks = all_feature_tasks[i : i + batch_size]
-            batch_company_features = await asyncio.gather(*batch_tasks)
-
-            for check in batch_company_features:
-                if isinstance(check, BaseException):
-                    logger.error(f"Error fetching company features: {check}")
-                    continue
-
-                company_features, prices = check
-                if company_features is None:
-                    continue
-                self.features = pd.concat(
-                    [self.features, company_features], ignore_index=True
+        for _, row in self.company_df.iterrows():
+            try:
+                company_features, historical_prices = await self._extract_company_info(
+                    row, start_date_str, end_date_str
                 )
-                self.historical_prices = pd.concat([self.historical_prices, prices])
-                break
+            except Exception as e:
+                continue
 
-            await asyncio.sleep(1)  # brief pause between batches to avoid rate limits
+            if company_features is None or historical_prices is None:
+                continue
+
+            logger.info(f"insert features for {company_features["Symbol"].unique()[0]}")
+            if company_features["Date"].isna().values.any(): # type: ignore
+                raise ValueError
+            self.features = pd.concat(
+                [self.features, company_features], ignore_index=True
+            )
+            logger.info(
+                f"all the unique tickers are {self.features["Symbol"].unique().tolist()}"
+            )
+            self.historical_prices = pd.concat(
+                [self.historical_prices, historical_prices]
+            )
 
         return self.features
 
