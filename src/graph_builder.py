@@ -131,7 +131,11 @@ class GraphManager:
         prices = await fetch_ticker_historical_prices(
             ticker, start_date_str, end_date_str
         )
-        company_concept = await fetch_sec_concepts(TICKER_TO_CIK_MAP[ticker])
+        try:
+            company_concept = await fetch_sec_concepts(TICKER_TO_CIK_MAP[ticker])
+        except Exception as e:
+            logger.error(f"Got the error while extract sec concepts for ticker: {ticker}, got error: {e}")
+            return None, None
 
         company_features = pd.DataFrame(columns=["Date", "Symbol"] + ALL_FEATURES)
 
@@ -171,7 +175,7 @@ class GraphManager:
             logger.error(f"The skip error has been raised for ticker {ticker}: {e}")
             return None, None
         except Exception as e:
-            logger.error(logger.error(f"The skip error has been raised for ticker {ticker}: {e}"))
+            logger.error(logger.error(f"An error has been raised for ticker {ticker}: {e}"))
             raise
 
         company_features["Symbol"] = ticker

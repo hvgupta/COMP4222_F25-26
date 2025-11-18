@@ -42,7 +42,7 @@ async def fetch_sec_concepts(cik: str) -> dict:
             if resp.status == 200:
                 return await resp.json()
             else:
-                raise Exception(f"Failed to fetch data: {resp.status}")
+                raise Exception(f"Failed to fetch data, code: {resp.status}, reason: {resp.reason or (await resp.text())}")
 
 
 async def fetch_ticker_historical_prices(
