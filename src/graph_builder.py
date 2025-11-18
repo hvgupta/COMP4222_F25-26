@@ -230,7 +230,7 @@ class GraphManager:
 
         self._check_seen_symbols()
 
-        start_date = Timestamp(year=self.start_year - 1, month=12, day=1)
+        start_date = Timestamp(year=self.start_year, month=12, day=1)
         end_date = Timestamp(year=self.end_year, month=12, day=31)
 
         start_date_str = start_date.strftime("%Y-%m-%d")
