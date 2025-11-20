@@ -344,7 +344,7 @@ class GraphManager:
 
         date_info_map = {}
 
-        for date in all_dates:
+        for date in all_dates[1:]:
             # Filter pivot data up to current date
             pivot_subset = pivot[pivot.index <= date]
 
