@@ -213,7 +213,6 @@ class GraphManager:
         if output_file.exists():
             existing_features = pd.read_csv(output_file, index_col=0)  # Add index_col=0
             seen_symbols = existing_features["Symbol"].unique().tolist()
-            print(seen_symbols)
             self.company_df = self.company_df[
                 ~self.company_df["Symbol"].isin(seen_symbols)
             ]
@@ -253,6 +252,7 @@ class GraphManager:
                 [self.historical_prices, historical_prices]
             )
 
+        self.features["Date"] = pd.to_datetime(self.features["Date"])
         sym_start_end_df = (
             self.features[["Date", "Symbol"]]
             .groupby("Symbol")
@@ -269,16 +269,24 @@ class GraphManager:
 
         return self.features
 
-    def _get_edges(self, rolling_corr: pd.DataFrame, symbols: list[str], device):
+    def _get_edges(
+        self,
+        rolling_corr: pd.DataFrame,
+        symbols: list[str],
+        ticker_to_id_map: Dict[str, int],
+        device,
+    ):
         edges: list[list[str]] = []
         for i, j in combinations(symbols, 2):
             corr_val = rolling_corr.loc[i, j]
             if pd.notna(corr_val) and corr_val >= self.corr_threshold:  # type: ignore
                 edges.append([i, j])
 
-        return self._conv_edge_index_to_tensor(edges, device)
+        return self._conv_edge_index_to_tensor(edges, ticker_to_id_map, device)
 
-    def _conv_edge_index_to_tensor(self, edges: list[list[str]], device):
+    def _conv_edge_index_to_tensor(
+        self, edges: list[list[str]], ticker_to_id_map: Dict[str, int], device
+    ):
         source_id_list = []
         target_id_list = []
 
@@ -286,31 +294,33 @@ class GraphManager:
             source_ticker = edge[0]
             target_ticker = edge[1]
 
-            source_id_list.append(self.ticker_to_id_map[source_ticker])
-            target_id_list.append(self.ticker_to_id_map[target_ticker])
+            source_id_list.append(ticker_to_id_map[source_ticker])
+            target_id_list.append(ticker_to_id_map[target_ticker])
 
         return torch.Tensor([source_id_list, target_id_list]).to(
             dtype=torch.int64, device=device
         )
 
     def _get_all_node_features_and_next_day_pct1_at_date(
-        self, date: pd.Timestamp, device
+        self, date: pd.Timestamp, ticker_to_id_map: Dict[str, int], device
     ):
-        feature_list: List[NDArray] = [None] * len(self.ticker_to_id_map) # type: ignore
+        feature_list: List[NDArray] = [None] * len(ticker_to_id_map)  # type: ignore
         df = self.features[self.features["Date"] == date]
 
-        for ticker, idx in self.ticker_to_id_map.items():
+        for ticker, idx in ticker_to_id_map.items():
             feature_list[idx] = df[df["Symbol"] == ticker][ALL_FEATURES].to_numpy()
 
         return torch.tensor(np.vstack(feature_list), device=device)
 
-    def _get_next_day_pct_change(self, date: pd.Timestamp, device):
+    def _get_next_day_pct_change(
+        self, date: pd.Timestamp, ticker_to_id_map: Dict[str, int], device
+    ):
         next_day = date + pd.Timedelta(days=1)
-        pct_list: List[float] = [0] * len(self.ticker_to_id_map)
+        pct_list: List[float] = [0] * len(ticker_to_id_map)
 
         df = self.features[self.features["Date"] == next_day]
 
-        for ticker, idx in self.ticker_to_id_map.items():
+        for ticker, idx in ticker_to_id_map.items():
             pct_list[idx] = df[df["Symbol"] == ticker]["PCT-1"].tolist()[0]
 
         return torch.tensor(pct_list, device=device)
@@ -321,7 +331,6 @@ class GraphManager:
         end_date: pd.Timestamp,
         all_dates: List[pd.Timestamp],
         column: str,
-        symbols: list[str],
         device,
     ) -> Dict[pd.Timestamp, Dict[str, torch.Tensor]]:
 
@@ -337,17 +346,30 @@ class GraphManager:
 
         for date in all_dates:
             # Filter pivot data up to current date
-            pivot_subset = pivot[pivot.index <= date].tail(self.window_size)
+            pivot_subset = pivot[pivot.index <= date]
 
             # Calculate correlation for this date's window
-            rolling_corr = pivot_subset.corr()
+            rolling_corr = (
+                pivot_subset.rolling(window=self.window_size, min_periods=1)
+                .corr()
+                .dropna()
+            )
+
+            avg_rolling_corr = rolling_corr.groupby(level=1).mean()
+            symbols: list[str] = avg_rolling_corr.index.tolist()
+
+            ticker_to_id_map = {symbol: idx for idx, symbol in enumerate(symbols)}
 
             date_info_map[date] = {
-                "edge_index": self._get_edges(rolling_corr, symbols, device),
-                "node_features": self._get_all_node_features_and_next_day_pct1_at_date(
-                    date, device
+                "edge_index": self._get_edges(
+                    avg_rolling_corr, symbols, ticker_to_id_map, device
                 ),
-                "next_day_pct1": self._get_next_day_pct_change(date, device),
+                "node_features": self._get_all_node_features_and_next_day_pct1_at_date(
+                    date, ticker_to_id_map, device
+                ),
+                "next_day_pct1": self._get_next_day_pct_change(
+                    date, ticker_to_id_map, device
+                ),
             }
 
         return date_info_map
@@ -375,8 +397,6 @@ class GraphManager:
 
         triplet_df = pd.DataFrame(columns=["Date", "src_node", "trgt_node"])
         symbols: list[str] = self.features["Symbol"].unique().tolist()
-
-        self.ticker_to_id_map = {ticker: idx for idx, ticker in enumerate(symbols)}
 
         all_perms = [
             {"src_node": src, "trgt_node": trgt}
@@ -407,7 +427,6 @@ class GraphManager:
             earliest_end_date,
             all_dates.to_list(),
             column,
-            symbols,
             device,
         )
 
