@@ -296,13 +296,13 @@ class GraphManager:
     def _get_all_node_features_and_next_day_pct1_at_date(
         self, date: pd.Timestamp, device
     ):
-        feature_list: List[NDArray] = [] * len(self.ticker_to_id_map)
+        feature_list: List[NDArray] = [None] * len(self.ticker_to_id_map) # type: ignore
         df = self.features[self.features["Date"] == date]
 
         for ticker, idx in self.ticker_to_id_map.items():
             feature_list[idx] = df[df["Symbol"] == ticker][ALL_FEATURES].to_numpy()
 
-        return torch.tensor(feature_list, device=device)
+        return torch.tensor(np.vstack(feature_list), device=device)
 
     def _get_next_day_pct_change(self, date: pd.Timestamp, device):
         next_day = date + pd.Timedelta(days=1)
