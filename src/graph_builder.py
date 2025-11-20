@@ -97,17 +97,7 @@ class GraphManager:
 
     def get_valid_date_range(
         self,
-    ) -> Tuple[Optional[pd.Timestamp], Optional[pd.Timestamp]]:
-        df = self.features.copy()
-        feature_cols = [col for col in df.columns if col != "Date"]
-        valid_rows = df[df[feature_cols].notna().all(axis=1)]
-
-        if valid_rows.empty:
-            return None, None  # or raise an error
-
-        earliest = valid_rows["Date"].min()
-        latest = valid_rows["Date"].max()
-        return earliest, latest
+    ) -> Tuple[Optional[pd.Timestamp], Optional[pd.Timestamp]]: ...
 
     def _merge_into_company_features(
         self,
@@ -329,15 +319,23 @@ class GraphManager:
 
     def _load_date_specific_info(
         self,
+        start_date: pd.Timestamp,
+        end_date: pd.Timestamp,
         all_dates: List[pd.Timestamp],
         column: str,
         symbols: list[str],
         device,
     ) -> Dict[pd.Timestamp, Dict[str, torch.Tensor]]:
 
-        pivot = self.features.pivot(
-            index="Date", columns="Symbol", values=column
-        ).sort_index()
+        constricted_df = self.features[
+            (self.features["Date"] >= start_date) & (self.features["Date"] <= end_date)
+        ]
+
+        pivot = (
+            constricted_df.pivot(index="Date", columns="Symbol", values=column)
+            .sort_index()
+            .reset_index(0)
+        )
 
         rolling_corr = pivot.rolling(self.window_size, min_periods=1).corr()
 
@@ -405,8 +403,8 @@ class GraphManager:
 
         return *self._train_test_split(
             triplet_df, train_frac
-        ), self._load_date_specific_info(
-            all_dates, column, symbols, device  # type: ignore
+        ), self._load_date_specific_info( latest_start_date, earliest_end_date,
+            all_dates.to_list(), column, symbols, device
         )
 
     async def load_features_csv(self):
