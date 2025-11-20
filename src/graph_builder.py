@@ -266,7 +266,7 @@ class GraphManager:
         sym_start_end_df = (
             self.features[["Date", "Symbol"]]
             .groupby("Symbol")
-            .describe()[["min", "max"]]
+            .describe()["Date"][["min", "max"]]
         )
 
         latest_start_date: pd.Timestamp = sym_start_end_df["min"].max()
