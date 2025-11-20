@@ -331,20 +331,21 @@ class GraphManager:
             (self.features["Date"] >= start_date) & (self.features["Date"] <= end_date)
         ]
 
-        pivot = (
-            constricted_df.pivot(index="Date", columns="Symbol", values=column)
-            .sort_index()
-            .reset_index(0)
-        )
-
-        rolling_corr = pivot.rolling(self.window_size, min_periods=1).corr()
+        pivot = constricted_df.pivot(
+            index="Date", columns="Symbol", values=column
+        ).sort_index()
 
         date_info_map = {}
 
         for date in all_dates:
-            rolling_corr_subset = rolling_corr[rolling_corr["Date"] <= date]
+            # Filter pivot data up to current date
+            pivot_subset = pivot[pivot.index <= date].tail(self.window_size)
+
+            # Calculate correlation for this date's window
+            rolling_corr = pivot_subset.corr()
+
             date_info_map[date] = {
-                "edge_index": self._get_edges(rolling_corr_subset, symbols, device),
+                "edge_index": self._get_edges(rolling_corr, symbols, device),
                 "node_features": self._get_all_node_features_and_next_day_pct1_at_date(
                     date, device
                 ),
@@ -403,8 +404,13 @@ class GraphManager:
 
         return *self._train_test_split(
             triplet_df, train_frac
-        ), self._load_date_specific_info( latest_start_date, earliest_end_date,
-            all_dates.to_list(), column, symbols, device
+        ), self._load_date_specific_info(
+            latest_start_date,
+            earliest_end_date,
+            all_dates.to_list(),
+            column,
+            symbols,
+            device,
         )
 
     async def load_features_csv(self):
