@@ -50,7 +50,7 @@ class TwoTowerSAGE(nn.Module):
         edge_index: torch.Tensor,
         src_idx: torch.Tensor,
         tgt_idx: torch.Tensor,
-        src_pct: torch.Tensor,
+        pct_change: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         x: [N, F]
@@ -73,7 +73,7 @@ class TwoTowerSAGE(nn.Module):
 
         # condition e1 by scalar src_pct: we scale & optionally clamp src_pct beforehand
         # Broadcast to D
-        src_pct = src_pct.view(-1, 1)  # [B,1]
+        src_pct = pct_change[src_idx]  # [B,1]
         cond = e1_src * src_pct  # [B,D]
 
         # raw dot
