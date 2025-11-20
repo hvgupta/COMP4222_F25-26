@@ -270,11 +270,9 @@ class GraphManager:
         return self.features
 
     def _get_edges(self, rolling_corr: pd.DataFrame, symbols: list[str], device):
-        avg_corr_matrix = rolling_corr.groupby(level=1).mean()
-
         edges: list[list[str]] = []
         for i, j in combinations(symbols, 2):
-            corr_val = avg_corr_matrix.loc[i, j]
+            corr_val = rolling_corr.loc[i, j]
             if pd.notna(corr_val) and corr_val >= self.corr_threshold:  # type: ignore
                 edges.append([i, j])
 
