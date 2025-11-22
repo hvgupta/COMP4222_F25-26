@@ -5,11 +5,9 @@ from src.graph_builder import (
     CORRELATION_THRESHOLD,
 )
 from src.model import TwoTowerSAGE
-from src.feature_lists import ALL_FEATURES
 
 import torch
 import asyncio
-import pandas as pd
 import torch.optim as optim
 from torch.nn import MSELoss, HuberLoss
 from torch.utils.data import TensorDataset, DataLoader
@@ -39,31 +37,19 @@ async def train_model(
     await GM.load_features_csv()
     logger.info(f"Loaded features for {GM.features['Symbol'].nunique()} companies")
 
-    train_data_points, test_data_points, date_info_map = GM.load_dataset(device=device)
-
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
     for epoch in range(num_epoch):
-        all_dates: list[pd.Timestamp] = train_data_points["Date"].unique().tolist()
-        for date in all_dates:
-            date_specifc_dataset = train_data_points[train_data_points["Date"] == date]
-            date_info = date_info_map[date]
+        logger.info(f"Starting epoch {epoch + 1}/{num_epoch}")
 
-            src_idx_tensor = torch.tensor(
-                [
-                    GM.ticker_to_id_map[ticker]
-                    for ticker in date_specifc_dataset["src_node"].to_list()
-                ],
-                device=device,
-            )
-
-            trgt_idx_tensor = torch.tensor(
-                [
-                    GM.ticker_to_id_map[ticker]
-                    for ticker in date_specifc_dataset["trgt_node"].to_list()
-                ],
-                device=device,
-            )
+        # Load dataset generates data for each date
+        for (
+            features_tensor,
+            edges,
+            src_idx_tensor,
+            trgt_idx_tensor,
+            pct_tensor,
+        ) in GM.load_dataset(device=device):
 
             dataset = TensorDataset(src_idx_tensor, trgt_idx_tensor)
 
@@ -74,14 +60,14 @@ async def train_model(
 
                 optimizer.zero_grad()
                 y_hat, E1, E2 = model(
-                    date_info["node_features"],
-                    date_info["edge_index"],
+                    features_tensor,
+                    edges,
                     src_idx,
                     trgt_idx,
-                    date_info["next_day_pct1"],
+                    pct_tensor,
                 )
 
-                pred_loss = criterion(y_hat, date_info["next_day_pct1"][trgt_idx])
+                pred_loss = criterion(y_hat, pct_tensor[trgt_idx])
                 # embedding L2 regularization
                 reg_loss = model.embedding_regularization(E1, E2)
 
@@ -90,13 +76,14 @@ async def train_model(
                 loss.backward()
                 optimizer.step()
 
-                logger.info(
-                    f"Current Date: {date.strftime("%Y-%m-%d")}, Current Batch Number: {idx}"
-                )
-        
-        logger.info(f"Finished epoch number {epoch}")
-    
-    return model, test_data_points
+                if idx % 10 == 0:  # Log every 10 batches
+                    logger.info(
+                        f"Epoch {epoch + 1}, Batch {idx}, Loss: {loss.item():.4f}"
+                    )
+
+        logger.info(f"Finished epoch {epoch + 1}")
+
+    return model
 
 
 def save_model(model: TwoTowerSAGE, filepath: str):
@@ -106,7 +93,7 @@ def save_model(model: TwoTowerSAGE, filepath: str):
 
 
 async def main():
-    model, test_data_points = await train_model(WINDOW_SIZE, CORRELATION_THRESHOLD, num_epoch=30)
+    model = await train_model(WINDOW_SIZE, CORRELATION_THRESHOLD, num_epoch=30)
     if model is None:
         raise ValueError("Something is wrong here")
 

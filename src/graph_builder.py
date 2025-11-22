@@ -28,13 +28,14 @@ from src.company_feature_functions import (
 
 import os
 import torch
+import asyncio
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from random import sample
 from pandas import Timestamp
-from numpy.typing import NDArray
+from typing import Optional, Tuple, Dict
 from itertools import combinations, permutations
-from typing import Optional, Tuple, Dict, List, TypedDict
 
 # ======= HYPER-PARAMETERS ======
 
@@ -71,6 +72,7 @@ class GraphManager:
         # this is a subset of the features in order to make the process of creating the graphs easier
 
         self.features = pd.DataFrame(columns=["Date", "Symbol"] + ALL_FEATURES)
+        self.test_features_per_date = {}
 
     def _conv_start_end_to_date(self, df: pd.DataFrame):
         df_columns = df.columns.tolist()
@@ -188,6 +190,9 @@ class GraphManager:
         sector_one_hot = get_one_hot_sector(row["GICS Sector"], ALL_GICS_SECTORS)
 
         company_features[ALL_SECTORS_FEATURES] = sector_one_hot.values
+        for feature in ALL_SECTORS_FEATURES:
+            company_features[feature] = company_features[feature].astype(np.float32)
+
         company_features[CUR_PRICE_FEATURES] = prices[CUR_PRICE_FEATURES]
 
         company_features["Date"] = pd.to_datetime(company_features["Date"])
@@ -207,6 +212,7 @@ class GraphManager:
             return None, None
 
         return company_features, prices
+    
 
     def _check_seen_symbols(self):
         output_file = Path(__file__).parent / "features.csv"
@@ -221,214 +227,186 @@ class GraphManager:
         else:
             logger.info("No existing features file found. Starting fresh.")
 
-    async def async_gather_features(self):
 
+    async def async_gather_features(self, batch_size=10):
         self._check_seen_symbols()
 
         start_date = Timestamp(year=self.start_year, month=12, day=1)
         end_date = Timestamp(year=self.end_year, month=12, day=31)
 
-        for _, row in self.company_df.iterrows():
-            try:
-                company_features, historical_prices = await self._extract_company_info(
-                    row, start_date, end_date
-                )
-            except Exception as e:
-                continue
+        # Process companies concurrently in batches
+        feature_batches = []
+        price_batches = []
 
-            if company_features is None or historical_prices is None:
-                continue
+        for i in range(0, len(self.company_df), batch_size):
+            batch = self.company_df.iloc[i : i + batch_size]
 
-            logger.info(f"insert features for {company_features["Symbol"].unique()[0]}")
-            if company_features["Date"].isna().values.any():  # type: ignore
-                raise ValueError
+            # Create tasks for concurrent execution
+            tasks = [
+                self._extract_company_info(row, start_date, end_date)
+                for _, row in batch.iterrows()
+            ]
+
+            # Execute batch concurrently
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for idx, result in enumerate(results):
+                if isinstance(result, BaseException):
+                    logger.error(
+                        f"Error processing {batch.iloc[idx]['Symbol']}: {result}"
+                    )
+                    continue
+
+                company_features, historical_prices = result
+
+                if company_features is None or historical_prices is None:
+                    continue
+
+                if company_features["Date"].isna().values.any():  # type: ignore
+                    continue
+
+                feature_batches.append(company_features)
+                price_batches.append(historical_prices)
+
+        # Concatenate all at once instead of iteratively
+        if feature_batches:
             self.features = pd.concat(
-                [self.features, company_features], ignore_index=True
-            )
-            logger.info(
-                f"all the unique tickers are {self.features["Symbol"].unique().tolist()}"
+                [self.features] + feature_batches, ignore_index=True
             )
             self.historical_prices = pd.concat(
-                [self.historical_prices, historical_prices]
+                [self.historical_prices] + price_batches, ignore_index=True
             )
 
+        # Vectorized date filtering
         self.features["Date"] = pd.to_datetime(self.features["Date"])
-        sym_start_end_df = (
-            self.features[["Date", "Symbol"]]
-            .groupby("Symbol")
-            .describe()["Date"][["min", "max"]]
-        )
+        self.features.dropna(inplace=True)
 
-        latest_start_date: pd.Timestamp = sym_start_end_df["min"].max()
-        earliest_end_date: pd.Timestamp = sym_start_end_df["max"].min()
+        # Calculate date range for each symbol
+        date_stats = (
+            self.features.dropna().groupby("Symbol")["Date"].agg(["min", "max"])
+        )
+        date_stats["range"] = (date_stats["max"] - date_stats["min"]).dt.days
+
+        # Get the maximum range
+        max_range = date_stats["range"].max()
+
+        # Filter companies with maximum range
+        companies_with_max_range = date_stats[
+            date_stats["range"] == max_range
+        ].index.tolist()
+
+        # Filter the dataframe
+        self.features = self.features[
+            self.features["Symbol"].isin(companies_with_max_range)
+        ]
+
+        self.features.sort_values(by=["Date", "Symbol"], inplace=True)
+        self.features.reset_index(drop=True, inplace=True)
+
+        # In async_gather_features, after filtering by max range:
+        # Also ensure no missing dates
+        pivot_test = self.features.pivot(
+            index="Date", columns="Symbol", values="Close"
+        )
+        complete_symbols = pivot_test.columns[pivot_test.isna().sum() == 0].tolist()
 
         self.features = self.features[
-            (self.features["Date"] >= latest_start_date)
-            & (self.features["Date"] <= earliest_end_date)
+            self.features["Symbol"].isin(complete_symbols)
         ]
 
         return self.features
 
     def _get_edges(
         self,
-        rolling_corr: pd.DataFrame,
+        avg_rolling_corr: pd.DataFrame,
         symbols: list[str],
-        ticker_to_id_map: Dict[str, int],
         device,
     ):
-        edges: list[list[str]] = []
-        for i, j in combinations(symbols, 2):
-            corr_val = rolling_corr.loc[i, j]
-            if pd.notna(corr_val) and corr_val >= self.corr_threshold:  # type: ignore
-                edges.append([i, j])
-
-        return self._conv_edge_index_to_tensor(edges, ticker_to_id_map, device)
-
-    def _conv_edge_index_to_tensor(
-        self, edges: list[list[str]], ticker_to_id_map: Dict[str, int], device
-    ):
-        source_id_list = []
-        target_id_list = []
-
-        for edge in edges:
-            source_ticker = edge[0]
-            target_ticker = edge[1]
-
-            source_id_list.append(ticker_to_id_map[source_ticker])
-            target_id_list.append(ticker_to_id_map[target_ticker])
-
-        return torch.Tensor([source_id_list, target_id_list]).to(
-            dtype=torch.int64, device=device
+        # Vectorized approach using numpy
+        corr_subset = avg_rolling_corr.loc[symbols, symbols]
+        
+        # Get upper triangle indices where correlation >= threshold
+        mask = (corr_subset.values >= self.corr_threshold) & np.triu(np.ones_like(corr_subset.values, dtype=bool), k=1)
+        
+        # Get indices of edges
+        src_indices, trgt_indices = np.where(mask)
+        
+        # Convert to edge index tensor directly
+        edge_index = torch.tensor(
+            [src_indices, trgt_indices], 
+            dtype=torch.int64, 
+            device=device
         )
-
-    def _get_all_node_features_and_next_day_pct1_at_date(
-        self, date: pd.Timestamp, ticker_to_id_map: Dict[str, int], device
-    ):
-        feature_list: List[NDArray] = [None] * len(ticker_to_id_map)  # type: ignore
-        df = self.features[self.features["Date"] == date]
-
-        for ticker, idx in ticker_to_id_map.items():
-            feature_list[idx] = df[df["Symbol"] == ticker][ALL_FEATURES].to_numpy()
-
-        return torch.tensor(np.vstack(feature_list), device=device)
-
-    def _get_next_day_pct_change(
-        self, date: pd.Timestamp, ticker_to_id_map: Dict[str, int], device
-    ):
-        next_day = date + pd.Timedelta(days=1)
-        pct_list: List[float] = [0] * len(ticker_to_id_map)
-
-        df = self.features[self.features["Date"] == next_day]
-
-        for ticker, idx in ticker_to_id_map.items():
-            pct_list[idx] = df[df["Symbol"] == ticker]["PCT-1"].tolist()[0]
-
-        return torch.tensor(pct_list, device=device)
-
-    def _load_date_specific_info(
-        self,
-        start_date: pd.Timestamp,
-        end_date: pd.Timestamp,
-        all_dates: List[pd.Timestamp],
-        column: str,
-        device,
-    ) -> Dict[pd.Timestamp, Dict[str, torch.Tensor]]:
-
-        constricted_df = self.features[
-            (self.features["Date"] >= start_date) & (self.features["Date"] <= end_date)
-        ]
-
-        pivot = constricted_df.pivot(
-            index="Date", columns="Symbol", values=column
-        ).sort_index()
-
-        date_info_map = {}
-
-        for date in all_dates[1:]:
-            # Filter pivot data up to current date
-            pivot_subset = pivot[pivot.index <= date]
-
-            # Calculate correlation for this date's window
-            rolling_corr = (
-                pivot_subset.rolling(window=self.window_size, min_periods=1)
-                .corr()
-                .dropna()
-            )
-
-            avg_rolling_corr = rolling_corr.groupby(level=1).mean()
-            symbols: list[str] = avg_rolling_corr.index.tolist()
-
-            ticker_to_id_map = {symbol: idx for idx, symbol in enumerate(symbols)}
-
-            date_info_map[date] = {
-                "edge_index": self._get_edges(
-                    avg_rolling_corr, symbols, ticker_to_id_map, device
-                ),
-                "node_features": self._get_all_node_features_and_next_day_pct1_at_date(
-                    date, ticker_to_id_map, device
-                ),
-                "next_day_pct1": self._get_next_day_pct_change(
-                    date, ticker_to_id_map, device
-                ),
-            }
-
-        return date_info_map
-
-    def _train_test_split(self, df: pd.DataFrame, train_frac: float):
-        train_data_points = df.groupby("Date").sample(frac=train_frac)
-        test_data_points = df.loc[~df.index.isin(train_data_points.index)]
-
-        return train_data_points, test_data_points
-
+        
+        return edge_index
+    
     def load_dataset(
         self,
-        days_skip: int = 15,
         column: str = "Close",
         train_frac: float = 0.8,
         *,
         device,
     ):
-
         latest_start_date: pd.Timestamp = self.features["Date"].min()
         earliest_end_date: pd.Timestamp = self.features["Date"].max()
 
+        usable_start_date = latest_start_date + pd.DateOffset(days=self.window_size)
         usable_end_date = earliest_end_date - pd.DateOffset(days=1)
-        # we cant take the last date to predict the next day since some nodes may be missing (more difficult to deal with so is being ignored)
 
-        triplet_df = pd.DataFrame(columns=["Date", "src_node", "trgt_node"])
-        symbols: list[str] = self.features["Symbol"].unique().tolist()
+        pivot = self.features.pivot(
+            index="Date", columns="Symbol", values=column
+        ).sort_index()
 
-        all_perms = [
-            {"src_node": src, "trgt_node": trgt}
-            for src, trgt in permutations(symbols, 2)
-        ]
+        rolling_corr = pivot.rolling(window=self.window_size).corr().dropna().abs()
 
-        all_dates = pd.date_range(
-            latest_start_date, usable_end_date, freq=pd.Timedelta(days=days_skip)
-        )
+        for date in pd.date_range(
+            usable_start_date, usable_end_date, freq=pd.Timedelta(days=self.window_size)
+        ):
+            date = pd.to_datetime(date)
+            # If it's a weekend (Saturday=5, Sunday=6), shift forward to the next Monday
+            if date.weekday() >= 5:
+                date = date + pd.Timedelta(days=(7 - date.weekday()))
+            logger.info(f"Processing date: {date}")
 
-        # Create a DataFrame from all_perms
-        perms_df = pd.DataFrame(all_perms)
+            features_subset = self.features[self.features["Date"] == date]
 
-        # Create a DataFrame from all_dates
-        dates_df = pd.DataFrame({"Date": all_dates})
+            all_symbols_at_date = features_subset["Symbol"].tolist()
+            # by default this is unique, since the features dataframe only has one entry per symbol per date
 
-        # Create Cartesian product using merge with a dummy key
-        perms_df["key"] = 1
-        dates_df["key"] = 1
+            pct_at_next_day = self.features[
+                self.features["Date"] == date + pd.Timedelta(days=1)
+            ]["PCT-1"].tolist()
 
-        # Merge to get all combinations: each date with every permutation
-        triplet_df = pd.merge(dates_df, perms_df, on="key").drop("key", axis=1)
+            avg_corr_upto_date = rolling_corr.loc[:date].groupby(level=1).mean()
 
-        return *self._train_test_split(
-            triplet_df, train_frac
-        ), self._load_date_specific_info(
-            latest_start_date,
-            earliest_end_date,
-            all_dates.to_list(),
-            column,
-            device,
-        )
+            edges = self._get_edges(avg_corr_upto_date, all_symbols_at_date, device)
+
+            all_symbol_perm = permutations(all_symbols_at_date, 2)
+
+            ticker_to_id_map = {symbol: idx for idx, symbol in enumerate(all_symbols_at_date)}
+
+            train_split = sample(
+                list(all_symbol_perm),
+                int(len(list(all_symbol_perm)) * train_frac),
+            )
+
+            src_idx_list = []
+            trgt_idx_list = []
+            for src, trgt in train_split:
+                src_idx_list.append(ticker_to_id_map[src])
+                trgt_idx_list.append(ticker_to_id_map[trgt])
+
+            features_tensor = torch.tensor(
+                features_subset[ALL_FEATURES].to_numpy(), device=device
+            )
+
+            src_idx_tensor = torch.tensor(src_idx_list, device=device)
+            trgt_idx_tensor = torch.tensor(trgt_idx_list, device=device)
+
+            pct_tensor = torch.tensor(pct_at_next_day, device=device)
+
+            yield features_tensor, edges, src_idx_tensor, trgt_idx_tensor, pct_tensor
+
 
     async def load_features_csv(self):
         path = Path(__file__).parent / "features.csv"
