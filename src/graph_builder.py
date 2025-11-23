@@ -345,65 +345,76 @@ class GraphManager:
         train_frac: float = 0.8,
         *,
         device,
-    ):
-        latest_start_date: pd.Timestamp = self.features["Date"].min()
-        earliest_end_date: pd.Timestamp = self.features["Date"].max()
-
-        usable_start_date = latest_start_date + pd.DateOffset(days=self.window_size)
-        usable_end_date = earliest_end_date - pd.DateOffset(days=1)
-
+    ):    
         pivot = self.features.pivot(
             index="Date", columns="Symbol", values=column
         ).sort_index()
-
+    
         rolling_corr = pivot.rolling(window=self.window_size).corr().dropna().abs()
 
-        for date in pd.date_range(
-            usable_start_date, usable_end_date, freq=pd.Timedelta(days=self.window_size)
+        all_dates = rolling_corr.index.get_level_values(0).unique()
+        usable_start_date = all_dates.min()
+        usable_end_date = all_dates.max()
+    
+        # Use business days only (excludes weekends)
+        for date in pd.bdate_range(
+            usable_start_date, usable_end_date, freq=f'{self.window_size}B'
         ):
             date = pd.to_datetime(date)
-            # If it's a weekend (Saturday=5, Sunday=6), shift forward to the next Monday
-            if date.weekday() >= 5:
-                date = date + pd.Timedelta(days=(7 - date.weekday()))
+            
+            # Skip if this date doesn't exist in our features
+            if date not in self.features["Date"].values:
+                logger.warning(f"Skipping date {date} - no data available")
+                continue
+                
             logger.info(f"Processing date: {date}")
-
+    
             features_subset = self.features[self.features["Date"] == date]
-
+            
+            # Skip if no features for this date
+            if features_subset.empty:
+                logger.warning(f"No features found for date {date}")
+                continue
+    
             all_symbols_at_date = features_subset["Symbol"].tolist()
-            # by default this is unique, since the features dataframe only has one entry per symbol per date
-
+    
             pct_at_next_day = self.features[
                 self.features["Date"] == date + pd.Timedelta(days=1)
             ]["PCT-1"].tolist()
-
+            
+            # Skip if no next day data
+            if not pct_at_next_day:
+                logger.warning(f"No next day data for {date}")
+                continue
+    
             avg_corr_upto_date = rolling_corr.loc[:date].groupby(level=1).mean()
-
+    
             edges = self._get_edges(avg_corr_upto_date, all_symbols_at_date, device)
-
+    
             all_symbol_perm = permutations(all_symbols_at_date, 2)
-
+    
             ticker_to_id_map = {symbol: idx for idx, symbol in enumerate(all_symbols_at_date)}
-
+    
             train_split = sample(
                 list(all_symbol_perm),
                 int(len(list(all_symbol_perm)) * train_frac),
             )
-
+    
             src_idx_list = []
             trgt_idx_list = []
             for src, trgt in train_split:
                 src_idx_list.append(ticker_to_id_map[src])
                 trgt_idx_list.append(ticker_to_id_map[trgt])
-
+    
             features_tensor = torch.tensor(
                 features_subset[ALL_FEATURES].to_numpy(), device=device
             )
-
+    
             src_idx_tensor = torch.tensor(src_idx_list, device=device)
             trgt_idx_tensor = torch.tensor(trgt_idx_list, device=device)
-
+    
             pct_tensor = torch.tensor(pct_at_next_day, device=device)
-
+    
             yield features_tensor, edges, src_idx_tensor, trgt_idx_tensor, pct_tensor
 
 
