@@ -370,9 +370,18 @@ class GraphManager:
 
             all_symbols_at_date = features_subset["Symbol"].tolist()
 
-            pct_at_next_day = self.features[
+            # Get next day data in the SAME order as features_subset
+            next_day_df = self.features[
                 self.features["Date"] == date + pd.Timedelta(days=1)
-            ]["PCT-1"].tolist()
+            ].set_index("Symbol")
+
+            # Align with current symbols
+            pct_at_next_day = [
+                next_day_df.loc[symbol, "PCT-1"] if symbol in next_day_df.index else 0.0
+                for symbol in all_symbols_at_date
+            ]
+
+            pct_tensor = torch.tensor(pct_at_next_day, device=device)
 
             # Skip if no next day data
             if not pct_at_next_day:
@@ -406,9 +415,7 @@ class GraphManager:
             src_idx_tensor = torch.tensor(src_idx_list, device=device)
             trgt_idx_tensor = torch.tensor(trgt_idx_list, device=device)
 
-            pct_tensor = torch.tensor(pct_at_next_day, device=device)
-
-            yield features_tensor, edges, src_idx_tensor, trgt_idx_tensor, pct_tensor
+            yield features_tensor.float(), edges, src_idx_tensor, trgt_idx_tensor, pct_tensor.float()
 
     async def load_features_csv(self):
         path = Path(__file__).parent / "features.csv"

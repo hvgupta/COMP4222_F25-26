@@ -31,18 +31,19 @@ class TwoTowerSAGE(nn.Module):
         self.normalize_embeddings = normalize_embeddings
 
     def encode_e1(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
-        sage1_conv1_o = self.sage1_conv1(x,edge_index)
-        x1 = F.relu(self.bn1(sage1_conv1_o))
+        x1 = self.sage1_conv1(x, edge_index)
+        x1 = F.relu(x1)
         x1 = F.dropout(x1, p=self.dropout, training=self.training)
         e1 = self.sage1_conv2(x1, edge_index)
-        return e1  # [N, D]
+        # Apply BatchNorm AFTER second conv if needed, or remove
+        return e1
 
     def encode_e2(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
-        sage2_conv1_o = self.sage2_conv1(x, edge_index)
-        x2 = F.relu(self.bn2(sage2_conv1_o))
+        x2 = self.sage2_conv1(x, edge_index)
+        x2 = F.relu(x2)
         x2 = F.dropout(x2, p=self.dropout, training=self.training)
         e2 = self.sage2_conv2(x2, edge_index)
-        return e2  # [N, D]
+        return e2
 
     def forward(
         self,
@@ -73,8 +74,8 @@ class TwoTowerSAGE(nn.Module):
 
         # condition e1 by scalar src_pct: we scale & optionally clamp src_pct beforehand
         # Broadcast to D
-        src_pct = pct_change[src_idx]  # [B,1]
-        cond = e1_src * src_pct  # [B,D]
+        src_pct = pct_change[src_idx].unsqueeze(1)  # [B] -> [B, 1]
+        cond = e1_src * src_pct  # [B, D] * [B, 1] = [B, D]
 
         # raw dot
         y_hat = (cond * e2_tgt).sum(dim=-1)  # [B]
