@@ -34,8 +34,8 @@ import pandas as pd
 from pathlib import Path
 from random import sample
 from pandas import Timestamp
-from typing import Optional, Tuple, Dict
-from itertools import combinations, permutations
+from typing import Optional, Tuple
+from itertools import permutations
 
 # ======= HYPER-PARAMETERS ======
 
@@ -212,7 +212,6 @@ class GraphManager:
             return None, None
 
         return company_features, prices
-    
 
     def _check_seen_symbols(self):
         output_file = Path(__file__).parent / "features.csv"
@@ -226,7 +225,6 @@ class GraphManager:
             logger.info(f"Resuming from {len(seen_symbols)} seen symbols.")
         else:
             logger.info("No existing features file found. Starting fresh.")
-
 
     async def async_gather_features(self, batch_size=10):
         self._check_seen_symbols()
@@ -282,9 +280,7 @@ class GraphManager:
         self.features.dropna(inplace=True)
 
         # Calculate date range for each symbol
-        date_stats = (
-            self.features.groupby("Symbol")["Date"].agg(["min", "max"])
-        )
+        date_stats = self.features.groupby("Symbol")["Date"].agg(["min", "max"])
         date_stats["range"] = (date_stats["max"] - date_stats["min"]).dt.days
 
         # Get the maximum range
@@ -304,14 +300,10 @@ class GraphManager:
 
         # In async_gather_features, after filtering by max range:
         # Also ensure no missing dates
-        pivot_test = self.features.pivot(
-            index="Date", columns="Symbol", values="Close"
-        )
+        pivot_test = self.features.pivot(index="Date", columns="Symbol", values="Close")
         complete_symbols = pivot_test.columns[pivot_test.isna().sum() == 0].tolist()
 
-        self.features = self.features[
-            self.features["Symbol"].isin(complete_symbols)
-        ]
+        self.features = self.features[self.features["Symbol"].isin(complete_symbols)]
 
         return self.features
 
@@ -323,100 +315,100 @@ class GraphManager:
     ):
         # Vectorized approach using numpy
         corr_subset = avg_rolling_corr.loc[symbols, symbols]
-        
+
         # Get upper triangle indices where correlation >= threshold
-        mask = (corr_subset.values >= self.corr_threshold) & np.triu(np.ones_like(corr_subset.values, dtype=bool), k=1)
-        
+        mask = (corr_subset.values >= self.corr_threshold) & np.triu(
+            np.ones_like(corr_subset.values, dtype=bool), k=1
+        )
+
         # Get indices of edges
         src_indices, trgt_indices = np.where(mask)
-        
+
         # Convert to edge index tensor directly
         edge_index = torch.tensor(
-            [src_indices, trgt_indices], 
-            dtype=torch.int64, 
-            device=device
+            [src_indices, trgt_indices], dtype=torch.int64, device=device
         )
-        
+
         return edge_index
-    
+
     def load_dataset(
         self,
         column: str = "Close",
         train_frac: float = 0.8,
         *,
         device,
-    ):    
+    ):
         pivot = self.features.pivot(
             index="Date", columns="Symbol", values=column
         ).sort_index()
-    
+
         rolling_corr = pivot.rolling(window=self.window_size).corr().dropna().abs()
 
         all_dates = rolling_corr.index.get_level_values(0).unique()
         usable_start_date = all_dates.min()
         usable_end_date = all_dates.max()
-    
+
         # Use business days only (excludes weekends)
         for date in pd.bdate_range(
-            usable_start_date, usable_end_date, freq=f'{self.window_size}B'
+            usable_start_date, usable_end_date, freq=f"{self.window_size}B"
         ):
             date = pd.to_datetime(date)
-            
+
             # Skip if this date doesn't exist in our features
             if date not in self.features["Date"].values:
                 logger.warning(f"Skipping date {date} - no data available")
                 continue
-                
+
             logger.info(f"Processing date: {date}")
-    
+
             features_subset = self.features[self.features["Date"] == date]
-            
+
             # Skip if no features for this date
             if features_subset.empty:
                 logger.warning(f"No features found for date {date}")
                 continue
-    
+
             all_symbols_at_date = features_subset["Symbol"].tolist()
-    
+
             pct_at_next_day = self.features[
                 self.features["Date"] == date + pd.Timedelta(days=1)
             ]["PCT-1"].tolist()
-            
+
             # Skip if no next day data
             if not pct_at_next_day:
                 logger.warning(f"No next day data for {date}")
                 continue
-    
+
             avg_corr_upto_date = rolling_corr.loc[:date].groupby(level=1).mean()
-    
+
             edges = self._get_edges(avg_corr_upto_date, all_symbols_at_date, device)
-    
-            all_symbol_perm = permutations(all_symbols_at_date, 2)
-    
-            ticker_to_id_map = {symbol: idx for idx, symbol in enumerate(all_symbols_at_date)}
-    
+
+            all_symbol_perm = list(permutations(all_symbols_at_date, 2))
+
+            ticker_to_id_map = {
+                symbol: idx for idx, symbol in enumerate(all_symbols_at_date)
+            }
+
             train_split = sample(
-                list(all_symbol_perm),
-                int(len(list(all_symbol_perm)) * train_frac),
+                all_symbol_perm, int(len(all_symbol_perm) * train_frac)
             )
-    
+
             src_idx_list = []
             trgt_idx_list = []
             for src, trgt in train_split:
                 src_idx_list.append(ticker_to_id_map[src])
                 trgt_idx_list.append(ticker_to_id_map[trgt])
-    
+
             features_tensor = torch.tensor(
                 features_subset[ALL_FEATURES].to_numpy(), device=device
             )
-    
+
             src_idx_tensor = torch.tensor(src_idx_list, device=device)
             trgt_idx_tensor = torch.tensor(trgt_idx_list, device=device)
-    
-            pct_tensor = torch.tensor(pct_at_next_day, device=device)
-    
-            yield features_tensor, edges, src_idx_tensor, trgt_idx_tensor, pct_tensor
 
+            pct_tensor = torch.tensor(pct_at_next_day, device=device)
+
+            yield features_tensor, edges, src_idx_tensor, trgt_idx_tensor, pct_tensor
 
     async def load_features_csv(self):
         path = Path(__file__).parent / "features.csv"
