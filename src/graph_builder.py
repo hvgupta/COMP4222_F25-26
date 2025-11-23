@@ -283,7 +283,7 @@ class GraphManager:
 
         # Calculate date range for each symbol
         date_stats = (
-            self.features.dropna().groupby("Symbol")["Date"].agg(["min", "max"])
+            self.features.groupby("Symbol")["Date"].agg(["min", "max"])
         )
         date_stats["range"] = (date_stats["max"] - date_stats["min"]).dt.days
 
@@ -301,7 +301,6 @@ class GraphManager:
         ]
 
         self.features.sort_values(by=["Date", "Symbol"], inplace=True)
-        self.features.reset_index(drop=True, inplace=True)
 
         # In async_gather_features, after filtering by max range:
         # Also ensure no missing dates
