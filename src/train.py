@@ -50,6 +50,15 @@ async def train_model(
             trgt_idx_tensor,
             pct_tensor,
         ) in GM.load_dataset(device=device):
+            # Skip if no training pairs were generated
+            if len(src_idx_tensor) == 0 or len(trgt_idx_tensor) == 0:
+                logger.warning("No training pairs for this date, skipping...")
+                continue
+            
+            # Skip if tensors have mismatched sizes
+            if len(src_idx_tensor) != len(trgt_idx_tensor):
+                logger.warning("Mismatched tensor sizes, skipping...")
+                continue
 
             dataset = TensorDataset(src_idx_tensor, trgt_idx_tensor)
 
