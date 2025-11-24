@@ -420,12 +420,43 @@ class GraphManager:
     async def load_features_csv(self):
         path = Path(__file__).parent / "features.csv"
         if os.path.exists(path):
-            self.features = pd.read_csv(path, index_col=0)
+            self.features = pd.read_csv(path)
             self.features["Date"] = pd.to_datetime(
                 self.features["Date"], format="mixed"
             )
             self.features.replace([np.inf, -np.inf], np.nan, inplace=True)
             self.features.dropna(inplace=True)
+
+            # NORMALIZE NUMERIC FEATURES (exclude one-hot encoded sectors)
+            numeric_features = [
+                col for col in ALL_FEATURES if col not in ALL_SECTORS_FEATURES
+            ]
+
+            print(f"Normalizing {len(numeric_features)} numeric features")
+            print(
+                f"Before normalization - Min: {self.features[numeric_features].min().min():.2f}, Max: {self.features[numeric_features].max().max():.2f}"
+            )
+
+            # # Standardize: (x - mean) / std
+            # feature_means = self.features[numeric_features].mean()
+            # feature_stds = self.features[numeric_features].std()
+
+            # self.features[numeric_features] = (
+            #     self.features[numeric_features] - feature_means
+            # ) / (feature_stds + 1e-8)
+
+            # # Clip extreme outliers to ±5 standard deviations
+            # self.features[numeric_features] = self.features[numeric_features].clip(
+            #     -5, 5
+            # )
+
+            # print(
+            #     f"After normalization - Mean: {self.features[numeric_features].mean().mean():.4f}, Std: {self.features[numeric_features].std().mean():.4f}"
+            # )
+            # print(
+            #     f"After normalization - Min: {self.features[numeric_features].min().min():.2f}, Max: {self.features[numeric_features].max().max():.2f}"
+            # )
+
             self.historical_prices = self.features[
                 ["Date", "Symbol", "Close", "High", "Low", "Open"]
             ]
