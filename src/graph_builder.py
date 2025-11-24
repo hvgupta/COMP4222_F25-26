@@ -423,7 +423,7 @@ class GraphManager:
     async def load_features_csv(self):
         path = Path(__file__).parent / "features.csv"
         if os.path.exists(path):
-            self.features = pd.read_csv(path)
+            self.features = pd.read_csv(path, index_col=0)
             self.features["Date"] = pd.to_datetime(
                 self.features["Date"], format="mixed"
             )

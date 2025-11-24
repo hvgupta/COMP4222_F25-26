@@ -9,19 +9,6 @@ from torch.nn import HuberLoss
 from torch.utils.data import TensorDataset, DataLoader
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-logger.info(f"The device being used is: {device.type}")
-
-
-from src.graph_builder import GraphManager, WINDOW_SIZE, CORRELATION_THRESHOLD
-from src.model import TwoTowerSAGE
-
-import torch
-import asyncio
-import torch.optim as optim
-from torch.nn import HuberLoss
-from torch.utils.data import TensorDataset, DataLoader
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"The device being used is: {device.type}")
 
 
