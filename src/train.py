@@ -1,3 +1,6 @@
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
 from src.logger import logger
 from src.graph_builder import GraphManager, WINDOW_SIZE, CORRELATION_THRESHOLD
 from src.model import TwoTowerSAGE
@@ -12,22 +15,39 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"The device being used is: {device.type}")
 
 
+@dataclass
+class TrainingSummary:
+    model: TwoTowerSAGE
+    config: Dict[str, Any]
+    history: List[Dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def best_epoch(self) -> Optional[Dict[str, Any]]:
+        if not self.history:
+            return None
+        return min(self.history, key=lambda entry: entry["avg_loss"])
+
+
 async def train_model(
     GM: GraphManager,
     num_epoch: int = 100,
     learning_rate: float = 0.001,  # REDUCED - was causing NaN
     batch_size: int = 128,
-):
+    model_kwargs: Optional[Dict[str, Any]] = None,
+) -> TrainingSummary:
     print(
         f"Starting model training: epochs={num_epoch}, lr={learning_rate}, batch_size={batch_size}"
     )
     print(f"Loaded features for {GM.features['Symbol'].nunique()} companies")
 
-    # Initialize model
-    # Initialize model
-    model = TwoTowerSAGE().to(device=device)
+    if GM.features.empty:
+        await GM.load_features_csv()
+
+    model_params = model_kwargs or {}
+    model = TwoTowerSAGE(**model_params).to(device=device)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     criterion = HuberLoss(delta=0.05)
+    history: List[Dict[str, Any]] = []
 
     for epoch in range(num_epoch):
         model.train()
@@ -148,13 +168,35 @@ async def train_model(
                     traceback.print_exc()
                     continue
 
+        avg_loss = epoch_loss / batch_count if batch_count > 0 else float("inf")
+        history.append(
+            {
+                "epoch": epoch + 1,
+                "avg_loss": avg_loss,
+                "batches": batch_count,
+                "graphs": graph_count,
+            }
+        )
         if batch_count > 0:
-            avg_loss = epoch_loss / batch_count
-            print(f"Epoch {epoch + 1} finished, Avg Loss: {avg_loss:.4f}, Graphs processed: {graph_count}")
+            print(
+                f"Epoch {epoch + 1} finished, Avg Loss: {avg_loss:.4f}, Graphs processed: {graph_count}"
+            )
         else:
             print(f"Epoch {epoch + 1} had no valid batches!")
 
-    return model
+    summary = TrainingSummary(
+        model=model,
+        config={
+            "num_epoch": num_epoch,
+            "learning_rate": learning_rate,
+            "batch_size": batch_size,
+            "model_kwargs": model_params,
+            "window_size": GM.window_size,
+            "corr_threshold": GM.corr_threshold,
+        },
+        history=history,
+    )
+    return summary
 
 
 
@@ -165,8 +207,9 @@ def save_model(model: TwoTowerSAGE, filepath: str):
 
 async def main():
     GM = GraphManager(WINDOW_SIZE, CORRELATION_THRESHOLD)
-    model = await train_model(GM, num_epoch=100)
-    save_model(model, "./corr_model.pth")
+    await GM.load_features_csv()
+    summary = await train_model(GM, num_epoch=100)
+    save_model(summary.model, "./corr_model.pth")
 
 
 if __name__ == "__main__":
