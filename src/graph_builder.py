@@ -28,6 +28,7 @@ from src.company_feature_functions import (
 
 import os
 import torch
+import joblib
 import asyncio
 import numpy as np
 import pandas as pd
@@ -36,6 +37,8 @@ from random import sample
 from pandas import Timestamp
 from typing import Optional, Tuple
 from itertools import permutations
+from sklearn.preprocessing import StandardScaler
+# STANDARDIZE using sklearn for easy save/load
 
 # ======= HYPER-PARAMETERS ======
 
@@ -426,37 +429,57 @@ class GraphManager:
             )
             self.features.replace([np.inf, -np.inf], np.nan, inplace=True)
             self.features.dropna(inplace=True)
-
-            # NORMALIZE NUMERIC FEATURES (exclude one-hot encoded sectors)
+    
+            # NORMALIZE NUMERIC FEATURES (exclude one-hot encoded sectors AND PCT-1 target)
             numeric_features = [
-                col for col in ALL_FEATURES if col not in ALL_SECTORS_FEATURES
+                col for col in ALL_FEATURES 
+                if col not in ALL_SECTORS_FEATURES and col != "PCT-1"  # EXCLUDE TARGET!
             ]
-
-            print(f"Normalizing {len(numeric_features)} numeric features")
+    
+            print(f"Normalizing {len(numeric_features)} numeric features (excluding PCT-1 target)")
+            print(f"NOT normalizing: PCT-1 (target), {len(ALL_SECTORS_FEATURES)} sector features")
             print(
-                f"Before normalization - Min: {self.features[numeric_features].min().min():.2f}, Max: {self.features[numeric_features].max().max():.2f}"
+                f"Before normalization - Min: {self.features[numeric_features].min().min():.2f}, "
+                f"Max: {self.features[numeric_features].max().max():.2f}"
             )
-
-            # # Standardize: (x - mean) / std
-            # feature_means = self.features[numeric_features].mean()
-            # feature_stds = self.features[numeric_features].std()
-
-            # self.features[numeric_features] = (
-            #     self.features[numeric_features] - feature_means
-            # ) / (feature_stds + 1e-8)
-
-            # # Clip extreme outliers to ±5 standard deviations
-            # self.features[numeric_features] = self.features[numeric_features].clip(
-            #     -5, 5
-            # )
-
-            # print(
-            #     f"After normalization - Mean: {self.features[numeric_features].mean().mean():.4f}, Std: {self.features[numeric_features].std().mean():.4f}"
-            # )
-            # print(
-            #     f"After normalization - Min: {self.features[numeric_features].min().min():.2f}, Max: {self.features[numeric_features].max().max():.2f}"
-            # )
-
+    
+            self.scaler = StandardScaler()
+            
+            # FIT and TRANSFORM on all training data
+            self.features[numeric_features] = self.scaler.fit_transform(
+                self.features[numeric_features]
+            )
+    
+            # Clip extreme outliers to ±5 standard deviations
+            self.features[numeric_features] = self.features[numeric_features].clip(-5, 5)
+    
+            print(
+                f"After normalization - Mean: {self.features[numeric_features].mean().mean():.4f}, "
+                f"Std: {self.features[numeric_features].std().mean():.4f}"
+            )
+            print(
+                f"After normalization - Min: {self.features[numeric_features].min().min():.2f}, "
+                f"Max: {self.features[numeric_features].max().max():.2f}"
+            )
+    
+            # SAVE SCALER for inference
+            scaler_path = Path(__file__).parent / "feature_scaler.pkl"
+            joblib.dump(self.scaler, scaler_path)
+            print(f"✓ Saved scaler to {scaler_path}")
+            
+            # SAVE CONFIG (which features to normalize)
+            import json
+            config_path = Path(__file__).parent / "normalization_config.json"
+            with open(config_path, 'w') as f:
+                json.dump({
+                    'normalized_features': numeric_features,
+                    'sector_features': ALL_SECTORS_FEATURES,
+                    'target_feature': 'PCT-1',
+                    'clip_min': -5,
+                    'clip_max': 5
+                }, f, indent=2)
+            print(f"✓ Saved normalization config to {config_path}")
+    
             self.historical_prices = self.features[
                 ["Date", "Symbol", "Close", "High", "Low", "Open"]
             ]
