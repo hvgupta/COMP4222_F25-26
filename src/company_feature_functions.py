@@ -9,6 +9,7 @@ from src.feature_lists import HISTORICAL_DATA_FEATURES
 
 
 import talib
+import numpy as np
 import pandas as pd
 from typing import Optional
 
@@ -287,11 +288,12 @@ def get_historical_price_features(ticker: str, ticker_price_data: pd.DataFrame):
     high_numpy = price_df["High"].to_numpy().reshape(-1)
     low_numpy = price_df["Low"].to_numpy().reshape(-1)
 
-    pct1 = talib.ROCP(close_numpy, timeperiod=1)
-    pct5 = talib.ROCP(close_numpy, timeperiod=5)
-    pct10 = talib.ROCP(close_numpy, timeperiod=10)
-    pct15 = talib.ROCP(close_numpy, timeperiod=15)
-    pct20 = talib.ROCP(close_numpy, timeperiod=20)
+    # ROCP returns decimal (0.02 = 2%), multiply by 100 to get percentage points
+    pct1 = talib.ROCP(close_numpy, timeperiod=1) * 100 
+    pct5 = talib.ROCP(close_numpy, timeperiod=5) * 100
+    pct10 = talib.ROCP(close_numpy, timeperiod=10) * 100
+    pct15 = talib.ROCP(close_numpy, timeperiod=15) * 100
+    pct20 = talib.ROCP(close_numpy, timeperiod=20) * 100
 
     mom5 = talib.MOM(close_numpy, timeperiod=5)
     mom10 = talib.MOM(close_numpy, timeperiod=10)
@@ -322,6 +324,7 @@ def get_historical_price_features(ticker: str, ticker_price_data: pd.DataFrame):
     price_features_df["NATR-20"] = natr20
 
     logger.info(f"Computed historical price features for {ticker}")
+    logger.info(f"PCT-1 range: [{pct1[~np.isnan(pct1)].min():.2f}, {pct1[~np.isnan(pct1)].max():.2f}]")
 
     return price_features_df
 
