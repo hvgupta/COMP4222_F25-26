@@ -20,12 +20,11 @@ MODEL_PARAM_KEYS = [
     "dropout",
     "embed_l2_reg",
     "normalize_embeddings",
-    "output_scale",
 ]
 GRAPH_PARAM_KEYS = ["window_size", "corr_threshold"]
 
 DEFAULT_SEARCH_SPACE: Dict[str, Iterable[Any]] = {
-    "window_size": [29, 36, 43],
+    "window_size": [29, 36, 43],  # n % 7 == 1 and n > 20
     "corr_threshold": [CORRELATION_THRESHOLD, 0.75],
     "num_epoch": [30, 60, 90, 120, 150],
     "learning_rate": [1e-3, 5e-4],
@@ -35,7 +34,6 @@ DEFAULT_SEARCH_SPACE: Dict[str, Iterable[Any]] = {
     "dropout": [0.3, 0.4],
     "embed_l2_reg": [1e-4],
     "normalize_embeddings": [True],
-    "output_scale": [0.05, 0.08],
 }
 
 
@@ -219,4 +217,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
