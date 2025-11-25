@@ -1,7 +1,4 @@
-from src.market_data_fetcher import *
-
-TICKER_TO_CIK_MAP = fetch_ticker_to_cik_map()
-SP500_COMPANIES = fetch_sp500_companies()
+from src.market_data_fetcher import SP500_COMPANIES
 
 ALL_GICS_SECTORS = SP500_COMPANIES["GICS Sector"].unique().tolist()
 

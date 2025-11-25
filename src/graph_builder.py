@@ -1,15 +1,44 @@
-from src.company_feature_functions import *
-from src.feature_lists import *
+from src.logger import logger
+from src.feature_lists import (
+    ALL_FEATURES,
+    HISTORICAL_DATA_FEATURES,
+    PB_FEATURES,
+    PE_FEATURES,
+    ROA_FEATURES,
+    ALL_SECTORS_FEATURES,
+    CUR_PRICE_FEATURES,
+    ALL_GICS_SECTORS,
+    CURRENT_FEATURES,
+)
+from src.market_data_fetcher import (
+    SKIPException,
+    SP500_COMPANIES,
+    TICKER_TO_CIK_MAP,
+    fetch_ticker_historical_prices,
+    fetch_sec_concepts,
+)
+from src.company_feature_functions import (
+    get_historical_price_features,
+    get_PB_ratio_data,
+    get_PE_ratio_data,
+    get_roa_data,
+    get_current_ratio_data,
+    get_one_hot_sector,
+)
 
 import os
 import torch
+import joblib
+import asyncio
 import numpy as np
 import pandas as pd
-from torch import Tensor
 from pathlib import Path
+from random import sample
 from pandas import Timestamp
-from itertools import combinations
 from typing import Optional, Tuple
+from itertools import permutations
+from sklearn.preprocessing import StandardScaler
+# STANDARDIZE using sklearn for easy save/load
 
 # ======= HYPER-PARAMETERS ======
 
@@ -37,46 +66,43 @@ class GraphManager:
     ):
         self.window_size = window_size
         self.corr_threshold = corr_threshold
-        self.start_year = start_year
+        self.start_year = start_year - 1
         self.end_year = end_year
         self.company_df = company_df
         self.historical_prices = pd.DataFrame(
-            columns=["Date", "Symbol", "Open", "High", "Low", "Close", "Volume"]
+            columns=["Date", "Symbol", "Open", "High", "Low", "Close"]
         )
         # this is a subset of the features in order to make the process of creating the graphs easier
 
         self.features = pd.DataFrame(columns=["Date", "Symbol"] + ALL_FEATURES)
+        self.test_features_per_date = {}
 
     def _conv_start_end_to_date(self, df: pd.DataFrame):
         df_columns = df.columns.tolist()
         df_columns.remove("start")
         df_columns.remove("end")
-        expanded_df = pd.DataFrame(columns=["date"] + df_columns)
-
-        for i, row in df.iterrows():
+        # Collect rows and create DataFrame once (avoids repeated concat + FutureWarning)
+        rows = []
+        for _, row in df.iterrows():
             start_date = pd.to_datetime(row["start"])
             end_date = pd.to_datetime(row["end"])
-            date_range = pd.date_range(start=start_date, end=end_date, freq="D")
-
-            for single_date in date_range:
+            for single_date in pd.date_range(start=start_date, end=end_date, freq="D"):
                 new_row = {col: row[col] for col in df_columns}
-                new_row["date"] = single_date
-                expanded_df = pd.concat(
-                    [expanded_df, pd.DataFrame([new_row])], ignore_index=True
-                )
+                new_row["Date"] = single_date
+                rows.append(new_row)
+
+        if not rows:
+            return pd.DataFrame(columns=["Date"] + df_columns)
+
+        expanded_df = pd.DataFrame(rows)
+        # ensure consistent column order and infer better dtypes
+        expanded_df = expanded_df[["Date"] + df_columns].infer_objects(copy=False)
+        expanded_df["Date"] = pd.to_datetime(expanded_df["Date"])
         return expanded_df
 
-    def get_valid_date_range(self)-> Tuple[Optional[pd.Timestamp], Optional[pd.Timestamp]]:
-        df = self.features.copy()
-        feature_cols = [col for col in df.columns if col != "Date"]
-        valid_rows = df[df[feature_cols].notna().all(axis=1)]
-
-        if valid_rows.empty:
-            return None, None  # or raise an error
-
-        earliest = valid_rows["Date"].min()
-        latest = valid_rows["Date"].max()
-        return earliest, latest
+    def get_valid_date_range(
+        self,
+    ) -> Tuple[Optional[pd.Timestamp], Optional[pd.Timestamp]]: ...
 
     def _merge_into_company_features(
         self,
@@ -85,20 +111,40 @@ class GraphManager:
         columns: list[str],
     ):
         expanded_df = self._conv_start_end_to_date(actual_info)
-        company_features[columns] = expanded_df[
-            expanded_df["date"].isin(company_features["Date"])
-        ][columns].reset_index(drop=True)
-        return company_features
-
-    async def _extract_company_info(
-        self, row: pd.Series, start_date_str: str, end_date_str: str
-    ):
-        ticker = row["Symbol"]
-        prices = await fetch_ticker_historical_prices(
-            ticker, start_date_str, end_date_str
+        merged_df = pd.merge(
+            company_features,
+            expanded_df[["Date"] + columns],
+            how="left",
+            on="Date",
+            suffixes=("_old", "_new"),
         )
 
-        company_concept = await fetch_sec_concepts(TICKER_TO_CIK_MAP[ticker])
+        merged_df = merged_df.drop(
+            labels=[col for col in merged_df.columns if col.endswith("_old")], axis=1
+        )
+
+        merged_df = merged_df.rename(
+            {col: col[:-4] for col in merged_df.columns if col.endswith("_new")}, axis=1
+        )
+
+        merged_df["Date"] = pd.to_datetime(merged_df["Date"])
+
+        return merged_df
+
+    async def _extract_company_info(
+        self, row: pd.Series, start_date: pd.Timestamp, end_date: pd.Timestamp
+    ):
+        ticker = row["Symbol"].replace(".", "-")
+        prices = await fetch_ticker_historical_prices(
+            ticker, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
+        )
+        try:
+            company_concept = await fetch_sec_concepts(TICKER_TO_CIK_MAP[ticker])
+        except Exception as e:
+            logger.error(
+                f"Got the error while extract sec concepts for ticker: {ticker}, got error: {e}"
+            )
+            return None, None
 
         company_features = pd.DataFrame(columns=["Date", "Symbol"] + ALL_FEATURES)
 
@@ -106,46 +152,69 @@ class GraphManager:
         # company_price_features = company_price_features[]
         company_features[["Date"] + HISTORICAL_DATA_FEATURES] = company_price_features
 
-        company_PE_ratio_df = await get_PE_ratio_data(
-            ticker, prices, company_concept["facts"], self.start_year, self.end_year
-        )
-        company_features = self._merge_into_company_features(
-            company_features, company_PE_ratio_df, PE_FEATURES
-        )
+        try:
+            company_PE_ratio_df = await get_PE_ratio_data(
+                ticker, prices, company_concept["facts"], self.start_year, self.end_year
+            )
+            company_features = self._merge_into_company_features(
+                company_features, company_PE_ratio_df, PE_FEATURES
+            )
 
-        company_PB_ratio_df = await get_PB_ratio_data(
-            ticker, prices, company_concept["facts"], self.start_year, self.end_year
-        )
-        company_features = self._merge_into_company_features(
-            company_features, company_PB_ratio_df, PB_FEATURES
-        )
+            company_PB_ratio_df = await get_PB_ratio_data(
+                ticker, prices, company_concept["facts"], self.start_year, self.end_year
+            )
+            company_features = self._merge_into_company_features(
+                company_features, company_PB_ratio_df, PB_FEATURES
+            )
 
-        company_ROA_df = await get_roa_data(
-            ticker, company_concept["facts"], self.start_year, self.end_year
-        )
-        company_features = self._merge_into_company_features(
-            company_features, company_ROA_df, ROA_FEATURES
-        )
+            company_ROA_df = await get_roa_data(
+                ticker, company_concept["facts"], self.start_year, self.end_year
+            )
+            company_features = self._merge_into_company_features(
+                company_features, company_ROA_df, ROA_FEATURES
+            )
 
-        company_current_ratio_df = await get_current_ratio_data(
-            ticker, company_concept["facts"], self.start_year, self.end_year
-        )
-        company_features = self._merge_into_company_features(
-            company_features, company_current_ratio_df, CURRENT_FEATURES
-        )
+            company_current_ratio_df = await get_current_ratio_data(
+                ticker, company_concept["facts"], self.start_year, self.end_year
+            )
+            company_features = self._merge_into_company_features(
+                company_features, company_current_ratio_df, CURRENT_FEATURES
+            )
+        except SKIPException as e:
+            logger.error(f"The skip error has been raised for ticker {ticker}: {e}")
+            return None, None
+        except Exception as e:
+            logger.error(
+                logger.error(f"An error has been raised for ticker {ticker}: {e}")
+            )
+            raise
 
         company_features["Symbol"] = ticker
         sector_one_hot = get_one_hot_sector(row["GICS Sector"], ALL_GICS_SECTORS)
 
         company_features[ALL_SECTORS_FEATURES] = sector_one_hot.values
+        for feature in ALL_SECTORS_FEATURES:
+            company_features[feature] = company_features[feature].astype(np.float32)
+
         company_features[CUR_PRICE_FEATURES] = prices[CUR_PRICE_FEATURES]
+
+        company_features["Date"] = pd.to_datetime(company_features["Date"])
+
         prices["Symbol"] = ticker
 
-        self.historical_prices = pd.concat(
-            [self.historical_prices, prices], ignore_index=True
+        logger.info(
+            f"the current ticker is {ticker}, company features is {'empty' if company_features.empty else 'not empty'}"
+        )
+        logger.info(
+            f"the current ticker is {ticker}, company features is {'None' if company_features.isna().values.all() else 'not None'}"
         )
 
-        return company_features
+        if (company_features["Date"].min() >= start_date + pd.DateOffset(years=1)) or (
+            (company_features["Date"].max() <= end_date - pd.DateOffset(years=1))
+        ):
+            return None, None
+
+        return company_features, prices
 
     def _check_seen_symbols(self):
         output_file = Path(__file__).parent / "features.csv"
@@ -160,237 +229,196 @@ class GraphManager:
         else:
             logger.info("No existing features file found. Starting fresh.")
 
-    async def async_gather_features(self, batch_size: int = 10):
-
+    async def async_gather_features(self, batch_size=10):
         self._check_seen_symbols()
 
-        start_date = Timestamp(year=self.start_year - 1, month=12, day=1)
+        start_date = Timestamp(year=self.start_year, month=12, day=1)
         end_date = Timestamp(year=self.end_year, month=12, day=31)
 
-        start_date_str = start_date.strftime("%Y-%m-%d")
-        end_date_str = end_date.strftime("%Y-%m-%d")
+        # Process companies concurrently in batches
+        feature_batches = []
+        price_batches = []
 
-        all_feature_tasks = [
-            self._extract_company_info(row, start_date_str, end_date_str)
-            for _, row in self.company_df.iterrows()
-        ]
+        for i in range(0, len(self.company_df), batch_size):
+            batch = self.company_df.iloc[i : i + batch_size]
 
-        for i in range(0, len(all_feature_tasks), batch_size):
-            batch_tasks = all_feature_tasks[i : i + batch_size]
-            batch_company_features = await asyncio.gather(
-                *batch_tasks, return_exceptions=True
+            # Create tasks for concurrent execution
+            tasks = [
+                self._extract_company_info(row, start_date, end_date)
+                for _, row in batch.iterrows()
+            ]
+
+            # Execute batch concurrently
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for idx, result in enumerate(results):
+                if isinstance(result, BaseException):
+                    logger.error(
+                        f"Error processing {batch.iloc[idx]['Symbol']}: {result}"
+                    )
+                    continue
+
+                company_features, historical_prices = result
+
+                if company_features is None or historical_prices is None:
+                    continue
+
+                if company_features["Date"].isna().values.any():  # type: ignore
+                    continue
+
+                feature_batches.append(company_features)
+                price_batches.append(historical_prices)
+
+        # Concatenate all at once instead of iteratively
+        if feature_batches:
+            self.features = pd.concat(
+                [self.features] + feature_batches, ignore_index=True
+            )
+            self.historical_prices = pd.concat(
+                [self.historical_prices] + price_batches, ignore_index=True
             )
 
-            for company_features in batch_company_features:
-                if not isinstance(company_features, pd.DataFrame):
-                    logger.error(f"Error fetching company features: {company_features}")
-                    continue
-                self.features = pd.concat(
-                    [self.features, company_features], ignore_index=True
-                )
+        # Vectorized date filtering
+        self.features["Date"] = pd.to_datetime(self.features["Date"])
+        self.features.dropna(inplace=True)
 
-            await asyncio.sleep(1)  # brief pause between batches to avoid rate limits
+        # Calculate date range for each symbol
+        date_stats = self.features.groupby("Symbol")["Date"].agg(["min", "max"])
+        date_stats["range"] = (date_stats["max"] - date_stats["min"]).dt.days
+
+        # Get the maximum range
+        max_range = date_stats["range"].max()
+
+        # Filter companies with maximum range
+        companies_with_max_range = date_stats[
+            date_stats["range"] == max_range
+        ].index.tolist()
+
+        # Filter the dataframe
+        self.features = self.features[
+            self.features["Symbol"].isin(companies_with_max_range)
+        ]
+
+        self.features.sort_values(by=["Date", "Symbol"], inplace=True)
+
+        # In async_gather_features, after filtering by max range:
+        # Also ensure no missing dates
+        pivot_test = self.features.pivot(index="Date", columns="Symbol", values="Close")
+        complete_symbols = pivot_test.columns[pivot_test.isna().sum() == 0].tolist()
+
+        self.features = self.features[self.features["Symbol"].isin(complete_symbols)]
 
         return self.features
 
-    def build_graph(
-        self, start_date: pd.Timestamp, end_date: pd.Timestamp, column: str
-    ):
-        """
-        Build a correlation graph using rolling-window average correlations.
-
-        Args:
-            start_date (Timestamp): The start of the date range.
-            end_date (Timestamp): The end of the date range.
-            column (str): Price column ("Close", "Open", "Return", etc.)
-
-        Returns:
-            edges: list of (stock_i, stock_j, avg_corr)
-            corr_matrix: DataFrame of average correlations
-        """
-
-        # ─────────────────────────────────────────────
-        # STEP 1: Filter by date + pivot to wide format
-        # ─────────────────────────────────────────────
-        df = self.historical_prices
-        df = df[(df["Date"] >= start_date) & (df["Date"] <= end_date)]
-
-        pivot = df.pivot(index="Date", columns="Symbol", values=column).sort_index()
-
-        # Optionally: convert prices → daily returns
-        # pivot = pivot.pct_change().dropna()
-
-        symbols = pivot.columns.tolist()
-
-        # ─────────────────────────────────────────────
-        # STEP 2: Compute rolling correlations for pairs
-        # ─────────────────────────────────────────────
-        # This creates a multi-index correlation DataFrame
-        rolling_corr = pivot.rolling(self.window_size).corr()
-
-        # ─────────────────────────────────────────────
-        # STEP 3: Average correlation across all windows
-        # ─────────────────────────────────────────────
-        avg_corr_matrix = rolling_corr.groupby(level=1).mean()
-
-        # Now avg_corr_matrix is a square matrix like:
-        #         AAPL   MSFT   NVDA
-        # AAPL    1.0    0.65   0.52
-        # MSFT    0.65   1.0    0.58
-        # NVDA    0.52   0.58   1.0
-
-        # ─────────────────────────────────────────────
-        # STEP 4: Build edge list using threshold
-        # ─────────────────────────────────────────────
-        edges: list[list[str]] = []
-        for i, j in combinations(symbols, 2):
-            corr_val = avg_corr_matrix.loc[i, j]
-            if pd.notna(corr_val) and corr_val >= self.corr_threshold:  # type: ignore
-                edges.append([i, j])
-
-        return edges, avg_corr_matrix
-
-    def conv_edge_index_to_tensor(self, edges: list[list[str]], device):
-        symbols = list(set([edge[0] for edge in edges] + [edge[1] for edge in edges]))
-        ticker_to_id_map = {ticker: idx for idx, ticker in enumerate(symbols)}
-        source_id_list = []
-        target_id_list = []
-
-        for edge in edges:
-            source_ticker = edge[0]
-            target_ticker = edge[1]
-
-            source_id_list.append(ticker_to_id_map[source_ticker])
-            target_id_list.append(ticker_to_id_map[target_ticker])
-
-        return Tensor([source_id_list, target_id_list]).to(
-            dtype=torch.int64,
-            device=device
-        )
-
-    def get_dataset(
+    def _get_edges(
         self,
-        edges,
-        start_date: pd.Timestamp,
-        end_date: pd.Timestamp,
-        n_samples: int = 1000,
+        avg_rolling_corr: pd.DataFrame,
+        symbols: list[str],
+        device,
     ):
-        """
-        Generate training dataset for edge prediction.
+        # Vectorized approach using numpy
+        corr_subset = avg_rolling_corr.loc[symbols, symbols]
 
-        Given source node's previous day features and current day PCT-1,
-        predict target node's current day PCT-1.
-
-        Args:
-            start_year (int): Start year for data collection
-            end_year (int): End year for data collection
-            n_samples (int): Number of random samples to return
-            price_column (str): Price column to use for correlation ("Close", "Open", etc.)
-
-        Returns:
-            X (pd.DataFrame): Features for training
-                - Columns: source node's features + current day PCT-1 + source_node_idx
-            Y (pd.DataFrame): Target for training
-                - Columns: target node's current day PCT-1 + target_node_idx
-        """
-        
-        def within_range(df):
-            return (df["Date"] >= start_date) & (df["Date"] <= end_date)
-
-        if not edges:
-            logger.warning("No edges found in graph. Cannot generate dataset.")
-            return pd.DataFrame(), pd.DataFrame()
-
-        # Create a mapping of ticker to index for both X and Y
-        unique_symbols = (
-            self.features["Symbol"].unique().tolist()
-        )  # takes the global context into consideration
-
-        ticker_to_idx = {ticker: idx for idx, ticker in enumerate(unique_symbols)}
-
-        # Prepare features dataframe with dates
-        features_with_dates = self.features.copy()
-        features_with_dates["Date"] = pd.to_datetime(features_with_dates["Date"])
-        features_with_dates[within_range(features_with_dates)] = features_with_dates
-        
-        features_with_dates = features_with_dates.sort_values("Date").reset_index(
-            drop=True
+        # Get upper triangle indices where correlation >= threshold
+        mask = (corr_subset.values >= self.corr_threshold) & np.triu(
+            np.ones_like(corr_subset.values, dtype=bool), k=1
         )
 
-        X_samples = []
-        Y_samples = []
+        # Get indices of edges
+        src_indices, trgt_indices = np.where(mask)
 
-        # For each edge (source, target, corr)
-        for source_ticker, target_ticker in edges:
+        # Convert to edge index tensor directly
+        edge_index = torch.tensor(
+            [src_indices, trgt_indices], dtype=torch.int64, device=device
+        )
 
-            if source_ticker not in ticker_to_idx or target_ticker not in ticker_to_idx:
+        return edge_index
+
+    def load_dataset(
+        self,
+        column: str = "Close",
+        train_frac: float = 0.8,
+        *,
+        device,
+    ):
+        pivot = self.features.pivot(
+            index="Date", columns="Symbol", values=column
+        ).sort_index()
+
+        rolling_corr = pivot.rolling(window=self.window_size).corr().dropna().abs()
+
+        all_dates = rolling_corr.index.get_level_values(0).unique()
+        usable_start_date = all_dates.min()
+        usable_end_date = all_dates.max()
+
+        # Use business days only (excludes weekends)
+        for date in pd.bdate_range(
+            usable_start_date, usable_end_date, freq=f"{self.window_size}B"
+        ):
+            date = pd.to_datetime(date)
+
+            # Skip if this date doesn't exist in our features
+            if date not in self.features["Date"].values:
+                logger.warning(f"Skipping date {date} - no data available")
                 continue
 
-            source_idx = ticker_to_idx[source_ticker]
-            target_idx = ticker_to_idx[target_ticker]
+            logger.info(f"Processing date: {date}")
 
-            # Get source and target data
-            source_data = features_with_dates[
-                features_with_dates["Symbol"] == source_ticker
-            ].reset_index(drop=True)
-            target_data = features_with_dates[
-                features_with_dates["Symbol"] == target_ticker
-            ].reset_index(drop=True)
+            features_subset = self.features[self.features["Date"] == date]
 
-            if source_data.empty or target_data.empty:
+            # Skip if no features for this date
+            if features_subset.empty:
+                logger.warning(f"No features found for date {date}")
                 continue
 
-            # For each date (skip first date since we need previous day)
-            for i in range(1, len(source_data)):
-                current_date = source_data.iloc[i]["Date"]
+            all_symbols_at_date = features_subset["Symbol"].tolist()
 
-                # Get target data for current date
-                target_current = target_data[target_data["Date"] == (current_date + pd.Timedelta(days=1))]
+            # Get next day data in the SAME order as features_subset
+            next_day_df = self.features[
+                self.features["Date"] == date + pd.Timedelta(days=1)
+            ].set_index("Symbol")
 
-                if target_current.empty:
-                    continue
+            # Align with current symbols
+            pct_at_next_day = [
+                next_day_df.loc[symbol, "PCT-1"] if symbol in next_day_df.index else 0.0
+                for symbol in all_symbols_at_date
+            ]
 
-                # Extract features
-                source_prev_row = source_data.iloc[i - 1]
-                target_curr_row = target_current.iloc[0]
+            pct_tensor = torch.tensor(pct_at_next_day, device=device)
 
-                # Build X: source's previous day features (all except Date, Symbol) + current day PCT-1
-                source_features: dict = {
-                    col: source_prev_row[col]
-                    for col in source_prev_row.index
-                    if col not in ["Date", "Symbol"]
-                }
+            # Skip if no next day data
+            if not pct_at_next_day:
+                logger.warning(f"No next day data for {date}")
+                continue
 
-                # Add source's current day PCT-1
-                source_features["current_PCT_1"] = source_data.iloc[i]["PCT-1"]
-                source_features["source_node_idx"] = source_idx
+            avg_corr_upto_date = rolling_corr.loc[:date].groupby(level=1).mean()
 
-                # Build Y: target's current day PCT-1 + target node index
-                y_sample = {
-                    "target_PCT_1": target_curr_row["PCT-1"],
-                    "target_node_idx": target_idx,
-                }
+            edges = self._get_edges(avg_corr_upto_date, all_symbols_at_date, device)
 
-                X_samples.append(source_features)
-                Y_samples.append(y_sample)
+            all_symbol_perm = list(permutations(all_symbols_at_date, 2))
 
-        # Convert to DataFrames
-        X_df = pd.DataFrame(X_samples)
-        Y_df = pd.DataFrame(Y_samples)
+            ticker_to_id_map = {
+                symbol: idx for idx, symbol in enumerate(all_symbols_at_date)
+            }
 
-        if X_df.empty or Y_df.empty:
-            logger.warning("No valid samples generated for dataset.")
-            return pd.DataFrame(), pd.DataFrame()
+            train_split = sample(
+                all_symbol_perm, int(len(all_symbol_perm) * train_frac)
+            )
 
-        # Random sampling
-        if len(X_df) > n_samples:
-            sample_indices = np.random.choice(len(X_df), n_samples, replace=False)
-            X_df = X_df.iloc[sample_indices].reset_index(drop=True)
-            Y_df = Y_df.iloc[sample_indices].reset_index(drop=True)
+            src_idx_list = []
+            trgt_idx_list = []
+            for src, trgt in train_split:
+                src_idx_list.append(ticker_to_id_map[src])
+                trgt_idx_list.append(ticker_to_id_map[trgt])
 
-        logger.info(f"Generated dataset with {len(X_df)} samples")
+            features_tensor = torch.tensor(
+                features_subset[ALL_FEATURES].to_numpy(), device=device
+            )
 
-        return X_df, Y_df
+            src_idx_tensor = torch.tensor(src_idx_list, device=device)
+            trgt_idx_tensor = torch.tensor(trgt_idx_list, device=device)
+
+            yield features_tensor.float(), edges, src_idx_tensor, trgt_idx_tensor, pct_tensor.float()
 
     async def load_features_csv(self):
         path = Path(__file__).parent / "features.csv"
@@ -399,7 +427,59 @@ class GraphManager:
             self.features["Date"] = pd.to_datetime(
                 self.features["Date"], format="mixed"
             )
+            self.features.replace([np.inf, -np.inf], np.nan, inplace=True)
             self.features.dropna(inplace=True)
+    
+            # NORMALIZE NUMERIC FEATURES (exclude one-hot encoded sectors AND PCT-1 target)
+            numeric_features = [
+                col for col in ALL_FEATURES 
+                if col not in ALL_SECTORS_FEATURES and col != "PCT-1"  # EXCLUDE TARGET!
+            ]
+    
+            print(f"Normalizing {len(numeric_features)} numeric features (excluding PCT-1 target)")
+            print(f"NOT normalizing: PCT-1 (target), {len(ALL_SECTORS_FEATURES)} sector features")
+            print(
+                f"Before normalization - Min: {self.features[numeric_features].min().min():.2f}, "
+                f"Max: {self.features[numeric_features].max().max():.2f}"
+            )
+    
+            self.scaler = StandardScaler()
+            
+            # FIT and TRANSFORM on all training data
+            self.features[numeric_features] = self.scaler.fit_transform(
+                self.features[numeric_features]
+            )
+    
+            # Clip extreme outliers to ±5 standard deviations
+            self.features[numeric_features] = self.features[numeric_features].clip(-5, 5)
+    
+            print(
+                f"After normalization - Mean: {self.features[numeric_features].mean().mean():.4f}, "
+                f"Std: {self.features[numeric_features].std().mean():.4f}"
+            )
+            print(
+                f"After normalization - Min: {self.features[numeric_features].min().min():.2f}, "
+                f"Max: {self.features[numeric_features].max().max():.2f}"
+            )
+    
+            # SAVE SCALER for inference
+            scaler_path = Path(__file__).parent / "feature_scaler.pkl"
+            joblib.dump(self.scaler, scaler_path)
+            print(f"✓ Saved scaler to {scaler_path}")
+            
+            # SAVE CONFIG (which features to normalize)
+            import json
+            config_path = Path(__file__).parent / "normalization_config.json"
+            with open(config_path, 'w') as f:
+                json.dump({
+                    'normalized_features': numeric_features,
+                    'sector_features': ALL_SECTORS_FEATURES,
+                    'target_feature': 'PCT-1',
+                    'clip_min': -5,
+                    'clip_max': 5
+                }, f, indent=2)
+            print(f"✓ Saved normalization config to {config_path}")
+    
             self.historical_prices = self.features[
                 ["Date", "Symbol", "Close", "High", "Low", "Open"]
             ]

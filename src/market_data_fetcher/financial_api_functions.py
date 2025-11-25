@@ -1,6 +1,5 @@
 from ..logger import logger
 
-import asyncio
 import aiohttp
 import requests
 import pandas as pd
@@ -43,7 +42,7 @@ async def fetch_sec_concepts(cik: str) -> dict:
             if resp.status == 200:
                 return await resp.json()
             else:
-                raise Exception(f"Failed to fetch data: {resp.status}")
+                raise Exception(f"Failed to fetch data, code: {resp.status}, reason: {resp.reason or (await resp.text())}")
 
 
 async def fetch_ticker_historical_prices(
@@ -70,44 +69,3 @@ async def fetch_ticker_historical_prices(
     data["Date"] = pd.to_datetime(data["Date"])
 
     return data
-
-
-async def extract_quarterly_data(
-    facts: dict, metric_name: str, unit: str
-) -> pd.DataFrame:
-    """
-    Extract quarterly fact entries from the SEC companyfacts JSON.
-    Performs DataFrame construction and datetime conversion in a thread to avoid blocking.
-    """
-    logger.info(f"Extracting quarterly data for {metric_name} in {unit} (async)")
-
-    def _extract() -> pd.DataFrame:
-        if "us-gaap" not in facts:
-            logger.warning("us-gaap data not found in facts")
-            return pd.DataFrame()
-
-        if metric_name not in facts["us-gaap"]:
-            logger.warning(f"{metric_name} not found in us-gaap facts")
-            return pd.DataFrame()
-
-        units = facts["us-gaap"][metric_name].get("units", {})
-        if unit not in units:
-            logger.warning(f"{unit} not found for {metric_name}")
-            return pd.DataFrame()
-
-        data = facts["us-gaap"][metric_name]["units"][unit]
-        df = pd.DataFrame(data)
-        if "end" in df.columns:
-            df["end"] = pd.to_datetime(df["end"], errors="coerce")
-            df = df.sort_values(by="end").reset_index(drop=True)
-        else:
-            # no end column -> empty
-            return pd.DataFrame()
-        return df
-
-    df = _extract()
-    if df.empty:
-        logger.info(f"No quarterly data extracted for {metric_name}")
-    else:
-        logger.info(f"Successfully extracted quarterly data for {metric_name}")
-    return df

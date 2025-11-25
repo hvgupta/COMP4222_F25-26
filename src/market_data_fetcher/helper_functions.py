@@ -3,13 +3,11 @@ from src.logger import logger
 import pandas as pd
 from pandas import Timestamp
 
-
-def determine_quarter(end_date: Timestamp):
-    quarter = end_date.quarter
-    return quarter
+class SKIPException(Exception):
+    pass
 
 
-def get_start_and_end_of_quarter(year: int, quarter: int):
+def _get_start_and_end_of_quarter(year: int, quarter: int):
     if quarter == 1:
         start, end = Timestamp(year=year, month=1, day=1), Timestamp(
             year=year, month=3, day=31
@@ -77,7 +75,7 @@ def _compute_missing_quarter_from_fy(
     sum_three = sum(present.values())
 
     imputed_val = fy_val - sum_three
-    start, end = get_start_and_end_of_quarter(year, int(missing_q[1]))
+    start, end = _get_start_and_end_of_quarter(year, int(missing_q[1]))
     y_q_to_quantity_map[(year, missing_q)] = {
         "start": start,
         "end": end,
@@ -104,7 +102,7 @@ def clean_period_table(
             if y_q_eps_table is None:
                 continue
 
-            start, end = get_start_and_end_of_quarter(year, int(quarter[1]))
+            start, end = _get_start_and_end_of_quarter(year, int(quarter[1]))
 
             y_q_to_quantity_map[(year, quarter)] = {
                 "start": start,
@@ -118,8 +116,9 @@ def clean_period_table(
             logger.warning(f"No FY data for year {year}, cannot impute missing quarters")
             continue
 
+        fy_val = y_q_eps_table["val"]
         y_q_to_quantity_map = _compute_missing_quarter_from_fy(
-            y_q_to_quantity_map, year, quantity_name, y_q_eps_table["val"]
+            y_q_to_quantity_map, year, quantity_name, fy_val
         )
 
     filtered_period_table = pd.concat(
@@ -134,6 +133,9 @@ def clean_period_table(
         ["end", "start"], ascending=[True, False], inplace=True
     )
     filtered_period_table.reset_index(drop=True, inplace=True)
+    
+    filtered_period_table["start"] = pd.to_datetime(filtered_period_table["start"])
+    filtered_period_table["end"] = pd.to_datetime(filtered_period_table["end"])
 
     return filtered_period_table
 
@@ -154,7 +156,7 @@ def clean_instance_tables(
                 continue
 
             latest_row = subset.iloc[0]
-            start, end = get_start_and_end_of_quarter(year, int(quarter[1]))
+            start, end = _get_start_and_end_of_quarter(year, int(quarter[1]))
             y_q_to_equity_list.append(
                 {
                     "start": start,
@@ -167,15 +169,15 @@ def clean_instance_tables(
     filtered_instance = pd.DataFrame.from_records(y_q_to_equity_list)
     if filtered_instance.empty:
         logger.warning("No data found in instance table after filtering")
-        raise ValueError("No data found in instance table after filtering")
+        raise SKIPException("No data found in instance table after filtering")
 
     for year in range(start_year, end_year + 1):
-        for quarter in ["Q1", "Q2", "Q3", "Q4", "FY"]:
+        for quarter in ["Q1", "Q2", "Q3", "Q4"]:
             if not filtered_instance.query(
                 f"end.dt.year == {year} and fp == '{quarter}'"
             ).empty:
                 continue
-            start, end = get_start_and_end_of_quarter(
+            start, end = _get_start_and_end_of_quarter(
                 year, int(quarter[1]) if quarter[1].isdigit() else 0
             )
             filtered_instance.loc[len(filtered_instance)] = {  # type: ignore
@@ -190,7 +192,57 @@ def clean_instance_tables(
     )
     filtered_instance.reset_index(drop=True, inplace=True)
 
-    filtered_instance[quantity_name] = filtered_instance[quantity_name].bfill()
-    filtered_instance.dropna(inplace=True)
+    # forward-compatible: backfill then infer/convert dtype explicitly
+    # keep as DataFrame to use infer_objects safely, then coerce to numeric if appropriate
+    filtered_instance[[quantity_name]] = (
+        filtered_instance[[quantity_name]].bfill().infer_objects(copy=False)
+    )
+    # if this quantity is numeric, coerce non-numeric to NaN then drop those rows
+    filtered_instance[quantity_name] = pd.to_numeric(
+        filtered_instance[quantity_name], errors="coerce"
+    )
+    filtered_instance.dropna(subset=[quantity_name], inplace=True)
 
     return filtered_instance
+
+
+async def extract_quarterly_data(
+    facts: dict, metric_name: str, unit: str
+) -> pd.DataFrame:
+    """
+    Extract quarterly fact entries from the SEC companyfacts JSON.
+    Performs DataFrame construction and datetime conversion in a thread to avoid blocking.
+    """
+    logger.info(f"Extracting quarterly data for {metric_name} in {unit} (async)")
+
+    def _extract() -> pd.DataFrame:
+        if "us-gaap" not in facts:
+            logger.warning("us-gaap data not found in facts")
+            return pd.DataFrame()
+
+        if metric_name not in facts["us-gaap"]:
+            logger.warning(f"{metric_name} not found in us-gaap facts")
+            return pd.DataFrame()
+
+        units = facts["us-gaap"][metric_name].get("units", {})
+        if unit not in units:
+            logger.warning(f"{unit} not found for {metric_name}")
+            return pd.DataFrame()
+
+        data = facts["us-gaap"][metric_name]["units"][unit]
+        df = pd.DataFrame(data)
+        if "end" in df.columns:
+            df["end"] = pd.to_datetime(df["end"], errors="coerce")
+            df = df.sort_values(by="end").reset_index(drop=True)
+        else:
+            # no end column -> empty
+            return pd.DataFrame()
+        return df
+
+    df = _extract()
+    if df.empty:
+        logger.info(f"No quarterly data extracted for {metric_name}")
+    else:
+        logger.info(f"Successfully extracted quarterly data for {metric_name}")
+    return df
+

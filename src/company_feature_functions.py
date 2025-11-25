@@ -1,13 +1,17 @@
 from src.logger import logger
-from src.market_data_fetcher import *
+from src.market_data_fetcher import (
+    extract_quarterly_data,
+    SKIPException,
+    clean_instance_tables,
+    clean_period_table,
+)
 from src.feature_lists import HISTORICAL_DATA_FEATURES
 
+
 import talib
+import numpy as np
 import pandas as pd
-
-
-class SKIPException(Exception):
-    pass
+from typing import Optional
 
 
 def _price_align_and_compute_ratio(
@@ -45,6 +49,16 @@ def _price_align_and_compute_ratio(
     return financial_data
 
 
+async def _multiple_possible_tag(
+    ticker: str, tags: list[str], assessor
+) -> Optional[pd.DataFrame]:
+    for tag in tags:
+        logger.info(f"trying tag {tag} for {ticker}")
+        response = await assessor(tag)
+        if not response.empty:
+            return response
+
+
 async def get_PE_ratio_data(
     ticker: str,
     ticker_price_data: pd.DataFrame,
@@ -56,8 +70,8 @@ async def get_PE_ratio_data(
         company_facts, "EarningsPerShareBasic", "USD/shares"
     )
     if eps_table.empty:
-        logger.warning(f"No EPS data found for {ticker}")
-        return pd.DataFrame()
+        raise SKIPException("eps_table is empty")
+
     eps_table = eps_table.copy()
     # ensure datetime types
 
@@ -89,37 +103,41 @@ async def get_PB_ratio_data(
 ):
     logger.info(f"Extracting PB ratio data for {ticker}")
 
-    equity_table = await extract_quarterly_data(
-        company_facts, "StockholdersEquity", "USD"
+    equity_table = await _multiple_possible_tag(
+        ticker,
+        ["StockholdersEquity", "LiabilitiesAndStockholdersEquity"],
+        lambda x: extract_quarterly_data(company_facts, x, "USD"),
     )
 
     standardised_shares = None
-    shares_table = None
-    for possible_tag in [
-        "CommonStockSharesOutstanding",
-        "EntityCommonStockSharesOutstanding",
-        "NumberOfCommonSharesOutstanding",
-        "CommonStockSharesIssued",
-        "WeightedAverageNumberOfSharesOutstandingBasic",
-        "WeightedAverageNumberOfSharesOutstandingDiluted",
-    ]:
-        try:
-            shares_table = await extract_quarterly_data(
-                company_facts, possible_tag, "shares"
-            )
-            standardised_shares = clean_instance_tables(
-                shares_table,
-                start_year=start_year,
-                end_year=end_year,
-                quantity_name="shareQuantity",
-            )
-            break
-        except Exception:
-            logger.warning(f"Failed to extract shares data using tag {possible_tag}")
-            continue
+    shares_table = await _multiple_possible_tag(
+        ticker,
+        [
+            "CommonStockSharesOutstanding",
+            "EntityCommonStockSharesOutstanding",
+            "NumberOfCommonSharesOutstanding",
+            "CommonStockSharesIssued",
+            "WeightedAverageNumberOfSharesOutstandingBasic",
+            "WeightedAverageNumberOfSharesOutstandingDiluted",
+        ],
+        lambda x: extract_quarterly_data(company_facts, x, "shares"),
+    )
+
+    if shares_table is None:
+        raise SKIPException("shares table is empty")
+
+    standardised_shares = clean_instance_tables(
+        shares_table,
+        start_year=start_year,
+        end_year=end_year,
+        quantity_name="shareQuantity",
+    )
 
     if standardised_shares is None or standardised_shares.empty:
-        raise SKIPException(f"No valid shares data found for {ticker}")
+        raise SKIPException(f"standardised_shares is empty")
+
+    if equity_table is None or equity_table.empty:
+        raise SKIPException("equity_table is empty")
 
     standardised_equity = clean_instance_tables(
         equity_table,
@@ -165,6 +183,11 @@ async def get_roa_data(
     net_df = await extract_quarterly_data(company_facts, "NetIncomeLoss", "USD")
     assets_df = await extract_quarterly_data(company_facts, "Assets", "USD")
 
+    if net_df.empty:
+        raise SKIPException("net_df is empty")
+    if assets_df.empty:
+        raise SKIPException("assets_df is empty")
+
     net_df["start"] = pd.to_datetime(net_df["start"], errors="coerce")  # type: ignore
     net_df["end"] = pd.to_datetime(net_df["end"], errors="coerce")  # type: ignore
     assets_df["end"] = pd.to_datetime(assets_df["end"], errors="coerce")  # type: ignore
@@ -181,6 +204,9 @@ async def get_roa_data(
         suffixes=("_net", "_assets"),
     )
 
+    combined_df.loc[combined_df["assets"] == 0, "assets"] = pd.NA
+    combined_df["assets"] = combined_df["assets"].bfill() # protects from div by 0
+    
     combined_df["roa"] = combined_df["net_q"] / combined_df["assets"]
     combined_df["trailing_roa"] = combined_df["roa"].shift(1)
     combined_df["one_year_avg_trailing_roa"] = (
@@ -201,12 +227,22 @@ async def get_current_ratio_data(
         f"Computing ROA and Current Ratio for {ticker} from {start_year} to {end_year}"
     )
 
-    assets_current_df = await extract_quarterly_data(
-        company_facts, "AssetsCurrent", "USD"
+    assets_current_df = await _multiple_possible_tag(
+        ticker,
+        ["AssetsCurrent", "Assets"],
+        lambda x: extract_quarterly_data(company_facts, x, "USD"),
     )
-    liab_current_df = await extract_quarterly_data(
-        company_facts, "LiabilitiesCurrent", "USD"
+
+    liab_current_df = await _multiple_possible_tag(
+        ticker,
+        ["LiabilitiesCurrent", "Liabilities"],
+        lambda x: extract_quarterly_data(company_facts, x, "USD"),
     )
+
+    if assets_current_df is None or assets_current_df.empty:
+        raise SKIPException("assests_current_df is empty")
+    if liab_current_df is None or liab_current_df.empty:
+        raise SKIPException("liab_current_df is empty")
 
     assets_current_df["end"] = pd.to_datetime(assets_current_df["end"], errors="coerce")  # type: ignore
     liab_current_df["end"] = pd.to_datetime(liab_current_df["end"], errors="coerce")  # type: ignore
@@ -252,11 +288,12 @@ def get_historical_price_features(ticker: str, ticker_price_data: pd.DataFrame):
     high_numpy = price_df["High"].to_numpy().reshape(-1)
     low_numpy = price_df["Low"].to_numpy().reshape(-1)
 
-    pct1 = talib.ROCP(close_numpy, timeperiod=1)
-    pct5 = talib.ROCP(close_numpy, timeperiod=5)
-    pct10 = talib.ROCP(close_numpy, timeperiod=10)
-    pct15 = talib.ROCP(close_numpy, timeperiod=15)
-    pct20 = talib.ROCP(close_numpy, timeperiod=20)
+    # ROCP returns decimal (0.02 = 2%), multiply by 100 to get percentage points
+    pct1 = talib.ROCP(close_numpy, timeperiod=1) * 100 
+    pct5 = talib.ROCP(close_numpy, timeperiod=5) * 100
+    pct10 = talib.ROCP(close_numpy, timeperiod=10) * 100
+    pct15 = talib.ROCP(close_numpy, timeperiod=15) * 100
+    pct20 = talib.ROCP(close_numpy, timeperiod=20) * 100
 
     mom5 = talib.MOM(close_numpy, timeperiod=5)
     mom10 = talib.MOM(close_numpy, timeperiod=10)
@@ -268,7 +305,7 @@ def get_historical_price_features(ticker: str, ticker_price_data: pd.DataFrame):
     natr15 = talib.NATR(high_numpy, low_numpy, close_numpy, timeperiod=15)
     natr20 = talib.NATR(high_numpy, low_numpy, close_numpy, timeperiod=20)
 
-    price_features_df["Date"] = price_df.index
+    price_features_df["Date"] = price_df["Date"]
 
     price_features_df["PCT-1"] = pct1
     price_features_df["PCT-5"] = pct5
@@ -287,6 +324,7 @@ def get_historical_price_features(ticker: str, ticker_price_data: pd.DataFrame):
     price_features_df["NATR-20"] = natr20
 
     logger.info(f"Computed historical price features for {ticker}")
+    logger.info(f"PCT-1 range: [{pct1[~np.isnan(pct1)].min():.2f}, {pct1[~np.isnan(pct1)].max():.2f}]")
 
     return price_features_df
 
@@ -317,11 +355,9 @@ async def get_profit_margin_data(
     )
 
     if net_df.empty:
-        logger.warning(f"No NetIncomeLoss data for {ticker}")
-        return pd.DataFrame()
+        raise SKIPException("net_df is empty")
     if revenue_df.empty:
-        logger.warning(f"No Revenues data for {ticker}")
-        return pd.DataFrame()
+        raise SKIPException("revenue_df is empty")
 
     # normalize datetimes
     net_df["start"] = pd.to_datetime(net_df["start"], errors="coerce")  # type: ignore
