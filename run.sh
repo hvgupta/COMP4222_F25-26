@@ -33,4 +33,4 @@ else
 fi
 
 # Run the desired command
-python -m scripts.hparam_search --max-combos 5 --output-dir exp1
+python -m scripts.hparam_search --output-dir exp1

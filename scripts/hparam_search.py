@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-import argparse
-import asyncio
 import csv
-import itertools
+import pytz
 import json
-from datetime import datetime
+import torch
+import asyncio
+import argparse
+import itertools
 from pathlib import Path
+from datetime import datetime
 from typing import Any, Dict, Iterable, List
 
 from src.graph_builder import GraphManager, WINDOW_SIZE, CORRELATION_THRESHOLD
@@ -25,10 +27,9 @@ GRAPH_PARAM_KEYS = ["window_size", "corr_threshold"]
 
 DEFAULT_SEARCH_SPACE: Dict[str, Iterable[Any]] = {
     "window_size": [29, 36, 43],  # n % 7 == 1 and n > 20
-    "corr_threshold": [CORRELATION_THRESHOLD, 0.75],
-    "num_epoch": [30, 60, 90, 120, 150],
+    "corr_threshold": [CORRELATION_THRESHOLD, 0.75, 0.6],
+    "num_epoch": [90, 120],
     "learning_rate": [1e-3, 5e-4],
-    "batch_size": [64, 128],
     "hidden_dim": [64, 96],
     "out_dim": [32],
     "dropout": [0.3, 0.4],
@@ -82,7 +83,7 @@ async def _run_single(
 
     best_epoch = summary.best_epoch or {}
     final_epoch = summary.history[-1] if summary.history else {}
-    timestamp = datetime.utcnow().isoformat()
+    timestamp = datetime.now(tz=pytz.timezone("Asia/Hong_Kong")).isoformat()
 
     history_path = run_dir / "history.json"
     with history_path.open("w", encoding="utf-8") as handle:
@@ -96,6 +97,8 @@ async def _run_single(
             handle,
             indent=2,
         )
+    
+    torch.save(summary.model.state_dict(), run_dir / "model.pth")
 
     return {
         "run_id": run_id,
