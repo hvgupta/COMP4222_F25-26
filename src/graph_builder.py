@@ -72,9 +72,6 @@ class GraphManager:
         self.start_year = start_year - 1
         self.end_year = end_year
         self.company_df = company_df
-        self.historical_prices = pd.DataFrame(
-            columns=["Date", "Symbol", "Open", "High", "Low", "Close"]
-        )
         # this is a subset of the features in order to make the process of creating the graphs easier
 
         self.features = pd.DataFrame(columns=["Date", "Symbol"] + ALL_FEATURES)
@@ -277,9 +274,6 @@ class GraphManager:
         if feature_batches:
             self.features = pd.concat(
                 [self.features] + feature_batches, ignore_index=True
-            )
-            self.historical_prices = pd.concat(
-                [self.historical_prices] + price_batches, ignore_index=True
             )
 
         # Vectorized date filtering
@@ -664,9 +658,5 @@ class GraphManager:
                     indent=2,
                 )
             print(f"✓ Saved normalization config to {config_path}")
-
-            self.historical_prices = self.features[
-                ["Date", "Symbol", "Close", "High", "Low", "Open"]
-            ]
         else:
             await self.async_gather_features()

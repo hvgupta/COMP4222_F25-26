@@ -57,6 +57,7 @@ def _expand(search_space: Dict[str, Iterable[Any]]):
 
 
 async def _run_single(
+    GM: GraphManager,
     config: Dict[str, Any],
     output_dir: Path,
     run_id: int,
@@ -65,16 +66,10 @@ async def _run_single(
     run_dir = output_dir / f"run_{run_id:03d}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    gm = GraphManager(
-        window_size=config.get("window_size", WINDOW_SIZE),
-        corr_threshold=config.get("corr_threshold", CORRELATION_THRESHOLD),
-    )
-    await gm.load_features_csv()
-
     model_kwargs = {k: config[k] for k in MODEL_PARAM_KEYS if k in config}
 
     summary: TrainingSummary = await train_model(
-        gm,
+        GM,
         num_epoch=config.get("num_epoch", 100),
         learning_rate=config.get("learning_rate", 1e-3),
         batch_size=config.get("batch_size", 128),
@@ -97,7 +92,7 @@ async def _run_single(
             handle,
             indent=2,
         )
-    
+
     torch.save(summary.model.state_dict(), run_dir / "model.pth")
 
     return {
@@ -139,10 +134,19 @@ async def _runner(args: argparse.Namespace):
         combos = combos[: args.max_combos]
 
     results: List[Dict[str, Any]] = []
+
+    temp_GM = GraphManager()
+    features = await temp_GM.async_gather_features(20)
+
     for run_id, combo in enumerate(combos, start=1):
+        GM = GraphManager(
+            window_size=combo.get("window_size", WINDOW_SIZE),
+            corr_threshold=combo.get("corr_threshold", CORRELATION_THRESHOLD),
+        )
+        GM.features = features
         print(f"Starting run {run_id}/{len(combos)} with config: {combo}")
         try:
-            result = await _run_single(combo, output_dir, run_id, args.notes)
+            result = await _run_single(GM, combo, output_dir, run_id, args.notes)
             results.append(result)
             print(
                 f"Finished run {run_id}: best_loss={result['best_loss']} "
