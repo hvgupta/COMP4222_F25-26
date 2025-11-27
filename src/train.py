@@ -42,15 +42,19 @@ async def train_model(
     learning_rate: float = 0.001,
     batch_size: int = 128,
     model_kwargs: Optional[Dict[str, Any]] = None,
+    use_cache: bool = True,  # NEW: Enable caching
 ) -> TrainingSummary:
     print(
         f"Starting model training: epochs={num_epoch}, lr={learning_rate}, batch_size={batch_size}"
     )
-    print(f"Loaded features for {GM.features['Symbol'].nunique()} companies")
-
+    
     if GM.features.empty:
         await GM.load_features_csv()
-
+    
+    # PRE-COMPUTE GRAPHS ONCE (if not already cached)
+    if use_cache:
+        GM.precompute_and_cache_graphs(train_frac=0.8, device='cpu')
+    
     model_params = model_kwargs or {}
     model = TwoTowerSAGE(**model_params).to(device=device)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -58,22 +62,26 @@ async def train_model(
     history: List[Dict[str, Any]] = []
 
     for epoch in range(num_epoch):
-        # TRAINING PHASE
         model.train()
         print(f"\n{'='*80}")
-        print(f"Epoch {epoch + 1}/{num_epoch} - TRAINING")
+        print(f"Epoch {epoch + 1}/{num_epoch}")
         print(f"{'='*80}")
 
         train_epoch_loss = 0.0
         train_batch_count = 0
         train_graph_count = 0
-
-        # VALIDATION PHASE tracking
+        
         val_epoch_loss = 0.0
         val_batch_count = 0
         val_graph_count = 0
 
-        # Each iteration is one date/graph
+        # USE CACHED GRAPHS (MUCH FASTER!)
+        dataset_loader = (
+            GM.load_dataset_from_cache(device=device) 
+            if use_cache 
+            else GM.load_dataset(device=device)
+        )
+
         for (
             features_tensor,
             edges,
@@ -82,7 +90,7 @@ async def train_model(
             src_idx_test_tensor,
             trgt_idx_test_tensor,
             pct_tensor,
-        ) in GM.load_dataset(device=device):
+        ) in dataset_loader:
 
             train_graph_count += 1
 
