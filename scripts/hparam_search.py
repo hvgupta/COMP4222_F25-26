@@ -26,15 +26,13 @@ MODEL_PARAM_KEYS = [
 GRAPH_PARAM_KEYS = ["window_size", "corr_threshold"]
 
 DEFAULT_SEARCH_SPACE: Dict[str, Iterable[Any]] = {
-    "window_size": [29, 36, 43],  # n % 7 == 1 and n > 20
-    "corr_threshold": [CORRELATION_THRESHOLD, 0.75, 0.6],
+    "window_size": [29, 36],  # n % 7 == 1 and n > 20
+    "corr_threshold": [0.75, 0.6],
     "num_epoch": [90, 120],
-    "learning_rate": [1e-3, 5e-4],
     "hidden_dim": [64, 96],
     "out_dim": [32, 64],
     "dropout": [0.3, 0.4],
-    "embed_l2_reg": [1e-4],
-    "normalize_embeddings": [True],
+    "normalize_embeddings": [True, False],
 }
 
 
