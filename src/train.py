@@ -23,15 +23,23 @@ class TrainingSummary:
 
     @property
     def best_epoch(self) -> Optional[Dict[str, Any]]:
+        """Returns the epoch with lowest validation loss."""
         if not self.history:
             return None
-        return min(self.history, key=lambda entry: entry["avg_loss"])
+        return min(self.history, key=lambda entry: entry.get("val_loss", float("inf")))
+
+    @property
+    def best_train_epoch(self) -> Optional[Dict[str, Any]]:
+        """Returns the epoch with lowest training loss."""
+        if not self.history:
+            return None
+        return min(self.history, key=lambda entry: entry["train_loss"])
 
 
 async def train_model(
     GM: GraphManager,
     num_epoch: int = 100,
-    learning_rate: float = 0.001,  # REDUCED - was causing NaN
+    learning_rate: float = 0.001,
     batch_size: int = 128,
     model_kwargs: Optional[Dict[str, Any]] = None,
 ) -> TrainingSummary:
@@ -50,65 +58,75 @@ async def train_model(
     history: List[Dict[str, Any]] = []
 
     for epoch in range(num_epoch):
+        # TRAINING PHASE
         model.train()
-        print(f"Starting epoch {epoch + 1}/{num_epoch}")
+        print(f"\n{'='*80}")
+        print(f"Epoch {epoch + 1}/{num_epoch} - TRAINING")
+        print(f"{'='*80}")
 
-        epoch_loss = 0.0
-        batch_count = 0
-        graph_count = 0
+        train_epoch_loss = 0.0
+        train_batch_count = 0
+        train_graph_count = 0
+
+        # VALIDATION PHASE tracking
+        val_epoch_loss = 0.0
+        val_batch_count = 0
+        val_graph_count = 0
 
         # Each iteration is one date/graph
         for (
             features_tensor,
             edges,
-            src_idx_tensor,
-            trgt_idx_tensor,
+            src_idx_train_tensor,
+            trgt_idx_train_tensor,
+            src_idx_test_tensor,
+            trgt_idx_test_tensor,
             pct_tensor,
         ) in GM.load_dataset(device=device):
 
-            graph_count += 1
+            train_graph_count += 1
 
-            # Validation checks
-            if src_idx_tensor.numel() == 0 or trgt_idx_tensor.numel() == 0:
-                print("No training pairs, skipping...")
+            # ============================================================
+            # TRAINING on train pairs
+            # ============================================================
+            if src_idx_train_tensor.numel() == 0 or trgt_idx_train_tensor.numel() == 0:
+                print("No training pairs, skipping graph...")
                 continue
 
             if features_tensor.numel() == 0 or edges.numel() == 0:
-                print("Empty features or edges, skipping...")
+                print("Empty features or edges, skipping graph...")
                 continue
 
             # Check for NaN/Inf in inputs
             if torch.isnan(features_tensor).any() or torch.isinf(features_tensor).any():
-                print("NaN/Inf in features, skipping date...")
+                print("NaN/Inf in features, skipping graph...")
                 continue
 
             if torch.isnan(pct_tensor).any() or torch.isinf(pct_tensor).any():
-                print("NaN/Inf in pct_tensor, skipping date...")
+                print("NaN/Inf in pct_tensor, skipping graph...")
                 continue
 
-            # LOG GRAPH STATISTICS (only in first epoch to avoid spam)
+            # LOG GRAPH STATISTICS (only in first epoch)
             if epoch == 0:
                 num_nodes = features_tensor.shape[0]
                 num_edges = edges.shape[1] if edges.numel() > 0 else 0
-                num_pairs = len(src_idx_tensor)
+                num_train_pairs = len(src_idx_train_tensor)
+                num_test_pairs = len(src_idx_test_tensor)
 
-                print(f"\n{'='*60}")
-                print(f"Graph {graph_count}: {num_nodes} nodes, {num_edges} edges, {num_pairs} pairs")
-                print(f"Features: min={features_tensor.min():.4f}, max={features_tensor.max():.4f}, mean={features_tensor.mean():.4f}")
-                print(f"pct_tensor: min={pct_tensor.min():.4f}, max={pct_tensor.max():.4f}, mean={pct_tensor.mean():.4f}, std={pct_tensor.std():.4f}")
-                print(f"{'='*60}\n")
+                print(f"\nGraph {train_graph_count}:")
+                print(f"  Nodes: {num_nodes}, Edges: {num_edges}")
+                print(f"  Train pairs: {num_train_pairs}, Test pairs: {num_test_pairs}")
+                print(f"  Features range: [{features_tensor.min():.4f}, {features_tensor.max():.4f}]")
+                print(f"  PCT range: [{pct_tensor.min():.4f}, {pct_tensor.max():.4f}]")
 
             if pct_tensor.mean() == 0:
-              print("skipping the graph with no pct change")
-              continue
+                print("Skipping graph with no pct change")
+                continue
 
+            # Create training dataset of pairs
+            train_dataset = TensorDataset(src_idx_train_tensor, trgt_idx_train_tensor)
 
-            # Create dataset of pairs
-            dataset = TensorDataset(src_idx_tensor, trgt_idx_tensor)
-
-            for idx, batch in enumerate(
-                DataLoader(dataset, batch_size, shuffle=True, drop_last=False)
-            ):
+            for batch in DataLoader(train_dataset, batch_size, shuffle=True, drop_last=False):
                 src_idx, trgt_idx = batch
 
                 optimizer.zero_grad()
@@ -126,12 +144,9 @@ async def train_model(
                     # Ground truth
                     y_true = pct_tensor[trgt_idx]
 
-                    # Check for NaN before loss
+                    # Check for NaN
                     if torch.isnan(y_hat).any():
-                        print("NaN in y_hat!")
-                        print(f"E1 range: [{E1.min():.4f}, {E1.max():.4f}]")
-                        print(f"E2 range: [{E2.min():.4f}, {E2.max():.4f}]")
-                        print(f"pct_tensor range: [{pct_tensor.min():.4f}, {pct_tensor.max():.4f}]")
+                        print("NaN in y_hat! Skipping batch...")
                         continue
 
                     # Losses
@@ -141,48 +156,102 @@ async def train_model(
 
                     # Check loss
                     if torch.isnan(loss) or torch.isinf(loss):
-                        print(f"NaN/Inf in loss! pred={pred_loss:.4f}, reg={reg_loss:.6f}")
+                        print(f"NaN/Inf in loss! Skipping batch...")
                         continue
 
                     loss.backward()
-
-                    # Gradient clipping
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
                     optimizer.step()
 
-                    epoch_loss += loss.item()
-                    batch_count += 1
+                    train_epoch_loss += loss.item()
+                    train_batch_count += 1
 
-                    if batch_count % 10 == 0:
+                    if train_batch_count % 10 == 0:
                         print(
-                            f"Epoch {epoch + 1}, Batch {batch_count}, Graph {graph_count}, "
-                            f"Loss: {loss.item():.4f}, Pred: {pred_loss.item():.4f}, "
-                            f"y_hat: [{y_hat.min():.4f}, {y_hat.max():.4f}], "
-                            f"y_true: [{y_true.min():.4f}, {y_true.max():.4f}]"
+                            f"[TRAIN] Batch {train_batch_count}, Graph {train_graph_count}, "
+                            f"Loss: {loss.item():.4f}, Pred: {pred_loss.item():.4f}"
                         )
 
                 except Exception as e:
                     print(f"Error during training: {e}")
-                    import traceback
-                    traceback.print_exc()
                     continue
 
-        avg_loss = epoch_loss / batch_count if batch_count > 0 else float("inf")
-        history.append(
-            {
-                "epoch": epoch + 1,
-                "avg_loss": avg_loss,
-                "batches": batch_count,
-                "graphs": graph_count,
-            }
-        )
-        if batch_count > 0:
-            print(
-                f"Epoch {epoch + 1} finished, Avg Loss: {avg_loss:.4f}, Graphs processed: {graph_count}"
-            )
+            # ============================================================
+            # VALIDATION on test pairs (if available)
+            # ============================================================
+            if src_idx_test_tensor.numel() > 0 and trgt_idx_test_tensor.numel() > 0:
+                model.eval()  # Switch to evaluation mode
+                val_graph_count += 1
+
+                test_dataset = TensorDataset(src_idx_test_tensor, trgt_idx_test_tensor)
+
+                with torch.no_grad():
+                    for batch in DataLoader(test_dataset, batch_size, shuffle=False):
+                        src_idx, trgt_idx = batch
+
+                        try:
+                            # Forward pass (no gradient)
+                            y_hat, E1, E2 = model(
+                                features_tensor,
+                                edges,
+                                src_idx,
+                                trgt_idx,
+                                pct_tensor,
+                            )
+
+                            y_true = pct_tensor[trgt_idx]
+
+                            if torch.isnan(y_hat).any():
+                                continue
+
+                            # Compute validation loss
+                            pred_loss = criterion(y_hat, y_true)
+                            reg_loss = model.embedding_regularization(E1, E2)
+                            loss = pred_loss + reg_loss
+
+                            if torch.isnan(loss) or torch.isinf(loss):
+                                continue
+
+                            val_epoch_loss += loss.item()
+                            val_batch_count += 1
+
+                        except Exception as e:
+                            print(f"Error during validation: {e}")
+                            continue
+
+                model.train()  # Switch back to training mode
+
+        # ============================================================
+        # EPOCH SUMMARY
+        # ============================================================
+        avg_train_loss = train_epoch_loss / train_batch_count if train_batch_count > 0 else float("inf")
+        avg_val_loss = val_epoch_loss / val_batch_count if val_batch_count > 0 else None
+
+        epoch_summary = {
+            "epoch": epoch + 1,
+            "train_loss": avg_train_loss,
+            "train_batches": train_batch_count,
+            "train_graphs": train_graph_count,
+        }
+
+        if avg_val_loss is not None:
+            epoch_summary.update({
+                "val_loss": avg_val_loss,
+                "val_batches": val_batch_count,
+                "val_graphs": val_graph_count,
+            })
+
+        history.append(epoch_summary)
+
+        # Print summary
+        print(f"\n{'='*80}")
+        print(f"Epoch {epoch + 1} Summary:")
+        print(f"  Train Loss: {avg_train_loss:.6f} ({train_batch_count} batches, {train_graph_count} graphs)")
+        if avg_val_loss is not None:
+            print(f"  Val Loss:   {avg_val_loss:.6f} ({val_batch_count} batches, {val_graph_count} graphs)")
         else:
-            print(f"Epoch {epoch + 1} had no valid batches!")
+            print(f"  Val Loss:   N/A (no test data)")
+        print(f"{'='*80}\n")
 
     summary = TrainingSummary(
         model=model,
@@ -196,8 +265,19 @@ async def train_model(
         },
         history=history,
     )
-    return summary
 
+    # Print best epoch info
+    if summary.best_epoch:
+        print(f"\n{'='*80}")
+        print(f"TRAINING COMPLETE")
+        print(f"{'='*80}")
+        print(f"Best Epoch (by validation loss): {summary.best_epoch['epoch']}")
+        print(f"  Train Loss: {summary.best_epoch['train_loss']:.6f}")
+        if 'val_loss' in summary.best_epoch:
+            print(f"  Val Loss:   {summary.best_epoch['val_loss']:.6f}")
+        print(f"{'='*80}\n")
+
+    return summary
 
 
 def save_model(model: TwoTowerSAGE, filepath: str):

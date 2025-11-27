@@ -38,6 +38,7 @@ from pandas import Timestamp
 from typing import Optional, Tuple
 from itertools import permutations
 from sklearn.preprocessing import StandardScaler
+
 # STANDARDIZE using sklearn for easy save/load
 
 # ======= HYPER-PARAMETERS ======
@@ -404,21 +405,38 @@ class GraphManager:
             train_split = sample(
                 all_symbol_perm, int(len(all_symbol_perm) * train_frac)
             )
+            test_split = [
+                sym_pair for sym_pair in all_symbol_perm if sym_pair not in train_split
+            ]
 
-            src_idx_list = []
-            trgt_idx_list = []
-            for src, trgt in train_split:
-                src_idx_list.append(ticker_to_id_map[src])
-                trgt_idx_list.append(ticker_to_id_map[trgt])
+            def src_trgt_from_split(split):
+                src_list = []
+                trgt_list = []
+                for src, trgt in split:
+                    src_list.append(ticker_to_id_map[src])
+                    trgt_list.append(ticker_to_id_map[trgt])
+                return torch.tensor(src_list, device=device), torch.tensor(
+                    trgt_list, device=device
+                )
+
+            src_idx_train_tensor, trgt_idx_train_tensor = src_trgt_from_split(
+                train_split
+            )
+            src_idx_test_tensor, trgt_idx_test_tensor = src_trgt_from_split(test_split)
 
             features_tensor = torch.tensor(
                 features_subset[ALL_FEATURES].to_numpy(), device=device
             )
 
-            src_idx_tensor = torch.tensor(src_idx_list, device=device)
-            trgt_idx_tensor = torch.tensor(trgt_idx_list, device=device)
-
-            yield features_tensor.float(), edges, src_idx_tensor, trgt_idx_tensor, pct_tensor.float()
+            yield (
+                features_tensor.float(),
+                edges,
+                src_idx_train_tensor,
+                trgt_idx_train_tensor,
+                src_idx_test_tensor,
+                trgt_idx_test_tensor,
+                pct_tensor.float(),
+            )
 
     async def load_features_csv(self):
         path = Path(__file__).parent / "features.csv"
@@ -429,30 +447,37 @@ class GraphManager:
             )
             self.features.replace([np.inf, -np.inf], np.nan, inplace=True)
             self.features.dropna(inplace=True)
-    
+
             # NORMALIZE NUMERIC FEATURES (exclude one-hot encoded sectors AND PCT-1 target)
             numeric_features = [
-                col for col in ALL_FEATURES 
+                col
+                for col in ALL_FEATURES
                 if col not in ALL_SECTORS_FEATURES and col != "PCT-1"  # EXCLUDE TARGET!
             ]
-    
-            print(f"Normalizing {len(numeric_features)} numeric features (excluding PCT-1 target)")
-            print(f"NOT normalizing: PCT-1 (target), {len(ALL_SECTORS_FEATURES)} sector features")
+
+            print(
+                f"Normalizing {len(numeric_features)} numeric features (excluding PCT-1 target)"
+            )
+            print(
+                f"NOT normalizing: PCT-1 (target), {len(ALL_SECTORS_FEATURES)} sector features"
+            )
             print(
                 f"Before normalization - Min: {self.features[numeric_features].min().min():.2f}, "
                 f"Max: {self.features[numeric_features].max().max():.2f}"
             )
-    
+
             self.scaler = StandardScaler()
-            
+
             # FIT and TRANSFORM on all training data
             self.features[numeric_features] = self.scaler.fit_transform(
                 self.features[numeric_features]
             )
-    
+
             # Clip extreme outliers to ±5 standard deviations
-            self.features[numeric_features] = self.features[numeric_features].clip(-5, 5)
-    
+            self.features[numeric_features] = self.features[numeric_features].clip(
+                -5, 5
+            )
+
             print(
                 f"After normalization - Mean: {self.features[numeric_features].mean().mean():.4f}, "
                 f"Std: {self.features[numeric_features].std().mean():.4f}"
@@ -461,25 +486,30 @@ class GraphManager:
                 f"After normalization - Min: {self.features[numeric_features].min().min():.2f}, "
                 f"Max: {self.features[numeric_features].max().max():.2f}"
             )
-    
+
             # SAVE SCALER for inference
             scaler_path = Path(__file__).parent / "feature_scaler.pkl"
             joblib.dump(self.scaler, scaler_path)
             print(f"✓ Saved scaler to {scaler_path}")
-            
+
             # SAVE CONFIG (which features to normalize)
             import json
+
             config_path = Path(__file__).parent / "normalization_config.json"
-            with open(config_path, 'w') as f:
-                json.dump({
-                    'normalized_features': numeric_features,
-                    'sector_features': ALL_SECTORS_FEATURES,
-                    'target_feature': 'PCT-1',
-                    'clip_min': -5,
-                    'clip_max': 5
-                }, f, indent=2)
+            with open(config_path, "w") as f:
+                json.dump(
+                    {
+                        "normalized_features": numeric_features,
+                        "sector_features": ALL_SECTORS_FEATURES,
+                        "target_feature": "PCT-1",
+                        "clip_min": -5,
+                        "clip_max": 5,
+                    },
+                    f,
+                    indent=2,
+                )
             print(f"✓ Saved normalization config to {config_path}")
-    
+
             self.historical_prices = self.features[
                 ["Date", "Symbol", "Close", "High", "Low", "Open"]
             ]
