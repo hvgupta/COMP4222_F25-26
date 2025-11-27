@@ -31,7 +31,7 @@ DEFAULT_SEARCH_SPACE: Dict[str, Iterable[Any]] = {
     "num_epoch": [90, 120],
     "learning_rate": [1e-3, 5e-4],
     "hidden_dim": [64, 96],
-    "out_dim": [32],
+    "out_dim": [32, 64],
     "dropout": [0.3, 0.4],
     "embed_l2_reg": [1e-4],
     "normalize_embeddings": [True],
