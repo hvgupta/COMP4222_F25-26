@@ -45,8 +45,7 @@ from sklearn.preprocessing import StandardScaler
 # ======= HYPER-PARAMETERS ======
 
 WINDOW_SIZE = 5
-"Number of Trading Days considered for correlation calculation"  # basically take the average over the window size
-
+"Number of Trading Days considered for correlation calculation" 
 CORRELATION_THRESHOLD = 0.8
 "Minimum correlation value to consider an edge between two tickers"
 

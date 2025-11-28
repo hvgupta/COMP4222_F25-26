@@ -137,6 +137,9 @@ async def _runner(args: argparse.Namespace):
     features = await temp_GM.async_gather_features(20)
 
     for run_id, combo in enumerate(combos, start=1):
+        if run_id < args.start_from:
+            continue
+        
         GM = GraphManager(
             window_size=combo.get("window_size", WINDOW_SIZE),
             corr_threshold=combo.get("corr_threshold", CORRELATION_THRESHOLD),
@@ -211,6 +214,14 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="Free-form string stored with each run for later reporting.",
     )
+
+    parser.add_argument(
+        "--start_from",
+        type=int,
+        default=0,
+        help="Run ID to start from, useful for resuming interrupted searches.",
+    )
+
     return parser
 
 
