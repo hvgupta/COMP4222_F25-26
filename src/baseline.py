@@ -37,6 +37,28 @@ class LinearRegressionBaseline:
         for (features_tensor, edges, src_idx_train, trgt_idx_train,
              src_idx_test, trgt_idx_test, pct_tensor) in GM.load_dataset(device=device):
             
+            if src_idx_train.numel() == 0 or trgt_idx_train.numel() == 0:
+                print("No training pairs, skipping graph...")
+                continue
+
+            if src_idx_test.numel() == 0 or trgt_idx_test.numel() == 0:
+                print("No test pairs, skipping graph...")
+                continue
+
+            if features_tensor.numel() == 0 or edges.numel() == 0:
+                print("Empty features or edges, skipping graph...")
+                continue
+
+            # Check for NaN/Inf in inputs
+            if torch.isnan(features_tensor).any() or torch.isinf(features_tensor).any():
+                print("NaN/Inf in features, skipping graph...")
+                continue
+
+            if torch.isnan(pct_tensor).any() or torch.isinf(pct_tensor).any():
+                print("NaN/Inf in pct_tensor, skipping graph...")
+                continue
+
+            
             # Convert to numpy
             features = features_tensor.cpu().numpy()  # [N, F]
             pct_values = pct_tensor.cpu().numpy()  # [N]
