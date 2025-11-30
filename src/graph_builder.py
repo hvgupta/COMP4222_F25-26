@@ -419,13 +419,17 @@ class GraphManager:
         Generate train/test pairs using vectorized operations.
         ~10x faster than itertools.permutations for large graphs.
         """
-        # Generate all pairs: (i, j) where i != j
         n = num_nodes
         total_pairs = n * (n - 1)
 
-        # Create index arrays
-        i = np.repeat(np.arange(n), n - 1)
-        j = np.array([x for x in range(n) for _ in range(n - 1) if x != _])
+        # More efficient: use meshgrid and masking
+        i_grid, j_grid = np.meshgrid(np.arange(n), np.arange(n), indexing='ij')
+        
+        # Mask out diagonal (i == j)
+        mask = i_grid != j_grid
+        
+        i = i_grid[mask]
+        j = j_grid[mask]
 
         # Randomly shuffle
         indices = np.random.permutation(total_pairs)
@@ -437,10 +441,8 @@ class GraphManager:
         return (
             i[train_indices],
             j[train_indices],
-            # src_train, trgt_train
             i[test_indices],
             j[test_indices],
-            # src_test, trgt_test
         )
 
     def _get_cache_path(self):

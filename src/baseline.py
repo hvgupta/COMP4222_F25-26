@@ -162,7 +162,7 @@ def load_gnn_model(model_path, device='cpu'):
     }
 
 
-def evaluate_gnn_on_test(model, GM, device='cpu'):
+def evaluate_gnn_on_test(model, GM: GraphManager, device='cpu'):
     """Evaluate the loaded GNN model on test data."""
     model.eval()
     all_losses = []
