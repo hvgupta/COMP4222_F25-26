@@ -195,6 +195,24 @@ def evaluate_gnn_on_test(model, GM: GraphManager, device='cpu'):
     with torch.no_grad():
         for (features, edges, src_idx_train, trgt_idx_train,
              src_idx_test, trgt_idx_test, pct_tensor) in GM.load_dataset(device=device):
+                
+            if src_idx_test.numel() == 0 or trgt_idx_test.numel() == 0:
+                print("No test pairs, skipping graph...")
+                continue
+
+            if features.numel() == 0 or edges.numel() == 0:
+                print("Empty features or edges, skipping graph...")
+                continue
+
+            # Check for NaN/Inf in inputs
+            if torch.isnan(features).any() or torch.isinf(features).any():
+                print("NaN/Inf in features, skipping graph...")
+                continue
+
+            if torch.isnan(pct_tensor).any() or torch.isinf(pct_tensor).any():
+                print("NaN/Inf in pct_tensor, skipping graph...")
+                continue
+
             
             # Test predictions - pass all required arguments to forward
             y_hat, E1, E2 = model(
