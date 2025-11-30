@@ -8,6 +8,7 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 from src.logger import logger
 from src.graph_builder import GraphManager
 from src.feature_lists import ALL_FEATURES
+from src.model import TwoTowerSAGE
 
 
 class LinearRegressionBaseline:
@@ -109,46 +110,116 @@ class LinearRegressionBaseline:
         }
 
 
-def load_best_gnn_results(best_run_path="exp3/run_001"):
-    """Load the best GNN model results from history.json"""
-    history_path = Path(best_run_path) / "history.json"
+def load_gnn_model(model_path="exp3/run_001", device='cpu'):
+    """Load the trained GNN model and its configuration."""
+    model_dir = Path(model_path)
     
-    with open(history_path, 'r') as f:
+    # Load config from history.json
+    with open(model_dir / "history.json", 'r') as f:
         data = json.load(f)
     
-    # Get best validation loss
+    config = data['config']
+    model_kwargs = config['model_kwargs']
+    
+    # Create model with same architecture
+    model = TwoTowerSAGE(
+        in_dim=len(ALL_FEATURES),
+        hidden_dim=model_kwargs['hidden_dim'],
+        out_dim=model_kwargs['out_dim'],
+        dropout=model_kwargs['dropout'],
+        embed_l2_reg=model_kwargs['embed_l2_reg']
+    ).to(device)
+    
+    # Load trained weights
+    model.load_state_dict(torch.load(model_dir / "model.pth", map_location=device))
+    model.eval()
+    
+    # Get best validation loss info
     val_losses = [h['val_loss'] for h in data['history']]
     best_loss = min(val_losses)
     best_epoch = data['history'][np.argmin(val_losses)]['epoch']
     
-    return {
+    logger.info(f"Loaded GNN model from {model_path}")
+    logger.info(f"  Architecture: in={len(ALL_FEATURES)}, hidden={model_kwargs['hidden_dim']}, out={model_kwargs['out_dim']}")
+    logger.info(f"  Best validation loss: {best_loss:.6f} at epoch {best_epoch}")
+    
+    return model, config, {
         'best_loss': best_loss,
         'best_epoch': best_epoch,
         'final_loss': val_losses[-1],
-        'config': data['config'],
         'all_losses': val_losses
     }
 
 
+def evaluate_gnn_on_test(model, GM, device='cpu'):
+    """Evaluate the loaded GNN model on test data."""
+    model.eval()
+    all_losses = []
+    all_predictions = []
+    all_targets = []
+    
+    logger.info("Evaluating GNN model on test data...")
+    
+    with torch.no_grad():
+        for (features, edges, src_idx_train, trgt_idx_train,
+             src_idx_test, trgt_idx_test, pct_tensor) in GM.load_dataset(device=device):
+            
+            # Get embeddings
+            embeddings = model(features, edges)
+            
+            # Test predictions
+            src_embeds = embeddings[src_idx_test]
+            trgt_embeds = embeddings[trgt_idx_test]
+            targets = pct_tensor[trgt_idx_test]
+            
+            # Compute predictions using model's predict method
+            predictions = model.predict(src_embeds, trgt_embeds).squeeze()
+            
+            # Compute loss
+            loss = torch.nn.functional.mse_loss(predictions, targets)
+            
+            all_losses.append(loss.item())
+            all_predictions.extend(predictions.cpu().numpy())
+            all_targets.extend(targets.cpu().numpy())
+    
+    avg_test_loss = np.mean(all_losses)
+    test_mae = mean_absolute_error(all_targets, all_predictions)
+    
+    logger.info(f"GNN Test MSE: {avg_test_loss:.6f}")
+    logger.info(f"GNN Test MAE: {test_mae:.6f}")
+    
+    return {
+        'test_mse': avg_test_loss,
+        'test_mae': test_mae,
+        'predictions': np.array(all_predictions),
+        'targets': np.array(all_targets)
+    }
+
+
 async def run_baseline_comparison():
-    """Run baseline and compare with best GNN model."""
+    """Run baseline and compare with loaded GNN model."""
     from src.graph_builder import WINDOW_SIZE, CORRELATION_THRESHOLD
     
-    # Load best GNN results
-    logger.info("="*80)
-    logger.info("Loading best GNN model results...")
-    logger.info("="*80)
-    gnn_results = load_best_gnn_results("exp3/run_001")
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    logger.info(f"Using device: {device}")
     
-    logger.info(f"GNN Best Validation Loss: {gnn_results['best_loss']:.6f} (Epoch {gnn_results['best_epoch']})")
-    logger.info(f"GNN Final Loss: {gnn_results['final_loss']:.6f}")
-    logger.info(f"GNN Config: {gnn_results['config']['model_kwargs']}")
+    # Load GNN model
+    logger.info("="*80)
+    logger.info("Loading GNN Model...")
+    logger.info("="*80)
+    gnn_model, gnn_config, gnn_history = load_gnn_model("exp3/run_001", device=device)
     
     # Initialize GraphManager
     GM = GraphManager(WINDOW_SIZE, CORRELATION_THRESHOLD)
     await GM.load_features_csv()
     
-    # Create and train baseline
+    # Evaluate GNN on test data
+    logger.info("\n" + "="*80)
+    logger.info("Evaluating GNN on Test Data...")
+    logger.info("="*80)
+    gnn_results = evaluate_gnn_on_test(gnn_model, GM, device=device)
+    
+    # Train and evaluate baseline
     logger.info("\n" + "="*80)
     logger.info("Training Linear Regression Baseline...")
     logger.info("="*80)
@@ -161,44 +232,61 @@ async def run_baseline_comparison():
     logger.info("\n" + "="*80)
     logger.info("COMPARISON: GNN vs LINEAR REGRESSION BASELINE")
     logger.info("="*80)
-    logger.info(f"\nGNN (Best Model - Run 001):")
-    logger.info(f"  Best Validation Loss:  {gnn_results['best_loss']:.6f}")
-    logger.info(f"  Final Validation Loss: {gnn_results['final_loss']:.6f}")
+    logger.info(f"\nGNN (Loaded Model - Run 001):")
+    logger.info(f"  Test MSE: {gnn_results['test_mse']:.6f}")
+    logger.info(f"  Test MAE: {gnn_results['test_mae']:.6f}")
+    logger.info(f"  Best Validation Loss (training): {gnn_history['best_loss']:.6f}")
+    logger.info(f"  Number of predictions: {len(gnn_results['predictions'])}")
     
     logger.info(f"\nLinear Regression Baseline:")
     logger.info(f"  Test MSE: {baseline_results['test_mse']:.6f}")
     logger.info(f"  Test MAE: {baseline_results['test_mae']:.6f}")
+    logger.info(f"  Number of predictions: {len(baseline_results['predictions'])}")
     
     # Calculate improvement
-    improvement_pct = ((baseline_results['test_mse'] - gnn_results['best_loss']) / baseline_results['test_mse']) * 100
+    improvement_mse = ((baseline_results['test_mse'] - gnn_results['test_mse']) / baseline_results['test_mse']) * 100
+    improvement_mae = ((baseline_results['test_mae'] - gnn_results['test_mae']) / baseline_results['test_mae']) * 100
     
-    logger.info(f"\nRelative Performance:")
-    if improvement_pct > 0:
-        logger.info(f"  GNN is {improvement_pct:.2f}% better than baseline")
+    logger.info(f"\nRelative Performance (MSE):")
+    if improvement_mse > 0:
+        logger.info(f"  ✓ GNN is {improvement_mse:.2f}% better than baseline")
     else:
-        logger.info(f"  Baseline is {-improvement_pct:.2f}% better than GNN")
+        logger.info(f"  ✗ Baseline is {-improvement_mse:.2f}% better than GNN")
     
-    logger.info(f"\nAbsolute Difference: {abs(baseline_results['test_mse'] - gnn_results['best_loss']):.6f}")
+    logger.info(f"\nRelative Performance (MAE):")
+    if improvement_mae > 0:
+        logger.info(f"  ✓ GNN is {improvement_mae:.2f}% better than baseline")
+    else:
+        logger.info(f"  ✗ Baseline is {-improvement_mae:.2f}% better than GNN")
+    
+    logger.info(f"\nAbsolute Differences:")
+    logger.info(f"  MSE: {abs(baseline_results['test_mse'] - gnn_results['test_mse']):.6f}")
+    logger.info(f"  MAE: {abs(baseline_results['test_mae'] - gnn_results['test_mae']):.6f}")
     logger.info("="*80)
     
     # Save comparison results
     comparison = {
+        'gnn_test_mse': gnn_results['test_mse'],
+        'gnn_test_mae': gnn_results['test_mae'],
+        'gnn_best_val_loss': gnn_history['best_loss'],
+        'gnn_best_epoch': gnn_history['best_epoch'],
         'baseline_mse': baseline_results['test_mse'],
         'baseline_mae': baseline_results['test_mae'],
-        'gnn_best_loss': gnn_results['best_loss'],
-        'gnn_final_loss': gnn_results['final_loss'],
-        'gnn_best_epoch': gnn_results['best_epoch'],
-        'improvement_pct': improvement_pct,
+        'improvement_mse_pct': improvement_mse,
+        'improvement_mae_pct': improvement_mae,
+        'num_test_samples_gnn': len(gnn_results['predictions']),
+        'num_test_samples_baseline': len(X_test),
         'num_train_samples': len(X_train),
-        'num_test_samples': len(X_test)
+        'gnn_config': gnn_config
     }
     
-    with open('baseline_comparison.json', 'w') as f:
+    output_path = Path('baseline_comparison.json')
+    with open(output_path, 'w') as f:
         json.dump(comparison, f, indent=2)
     
-    logger.info("\n✓ Saved comparison results to baseline_comparison.json")
+    logger.info(f"\n✓ Saved comparison results to {output_path}")
     
-    return baseline, baseline_results, gnn_results, comparison
+    return baseline, baseline_results, gnn_model, gnn_results, comparison
 
 
 if __name__ == "__main__":
