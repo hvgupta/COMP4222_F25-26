@@ -137,7 +137,6 @@ def load_gnn_model(model_path, device='cpu'):
         hidden_dim=model_kwargs['hidden_dim'],
         out_dim=model_kwargs['out_dim'],
         dropout=model_kwargs['dropout'],
-        embed_l2_reg=model_kwargs['embed_l2_reg'],
         normalize_embeddings=model_kwargs['normalize_embeddings']
     ).to(device)
     
