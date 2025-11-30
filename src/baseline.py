@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import pandas as pd
 import json
+import argparse
 from pathlib import Path
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, mean_absolute_error
@@ -110,12 +111,21 @@ class LinearRegressionBaseline:
         }
 
 
-def load_gnn_model(model_path="exp3/run_001", device='cpu'):
+def load_gnn_model(model_path, device='cpu'):
     """Load the trained GNN model and its configuration."""
     model_dir = Path(model_path)
     
+    # Verify paths exist
+    history_path = model_dir / "history.json"
+    model_weights_path = model_dir / "model.pth"
+    
+    if not history_path.exists():
+        raise FileNotFoundError(f"History file not found: {history_path}")
+    if not model_weights_path.exists():
+        raise FileNotFoundError(f"Model weights not found: {model_weights_path}")
+    
     # Load config from history.json
-    with open(model_dir / "history.json", 'r') as f:
+    with open(history_path, 'r') as f:
         data = json.load(f)
     
     config = data['config']
@@ -131,7 +141,7 @@ def load_gnn_model(model_path="exp3/run_001", device='cpu'):
     ).to(device)
     
     # Load trained weights
-    model.load_state_dict(torch.load(model_dir / "model.pth", map_location=device))
+    model.load_state_dict(torch.load(model_weights_path, map_location=device))
     model.eval()
     
     # Get best validation loss info
@@ -196,18 +206,19 @@ def evaluate_gnn_on_test(model, GM, device='cpu'):
     }
 
 
-async def run_baseline_comparison():
+async def run_baseline_comparison(model_path, output_dir=None):
     """Run baseline and compare with loaded GNN model."""
     from src.graph_builder import WINDOW_SIZE, CORRELATION_THRESHOLD
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     logger.info(f"Using device: {device}")
+    logger.info(f"Model path: {model_path}")
     
     # Load GNN model
     logger.info("="*80)
     logger.info("Loading GNN Model...")
     logger.info("="*80)
-    gnn_model, gnn_config, gnn_history = load_gnn_model("exp3/run_001", device=device)
+    gnn_model, gnn_config, gnn_history = load_gnn_model(model_path, device=device)
     
     # Initialize GraphManager
     GM = GraphManager(WINDOW_SIZE, CORRELATION_THRESHOLD)
@@ -232,7 +243,7 @@ async def run_baseline_comparison():
     logger.info("\n" + "="*80)
     logger.info("COMPARISON: GNN vs LINEAR REGRESSION BASELINE")
     logger.info("="*80)
-    logger.info(f"\nGNN (Loaded Model - Run 001):")
+    logger.info(f"\nGNN (Loaded Model from {model_path}):")
     logger.info(f"  Test MSE: {gnn_results['test_mse']:.6f}")
     logger.info(f"  Test MAE: {gnn_results['test_mae']:.6f}")
     logger.info(f"  Best Validation Loss (training): {gnn_history['best_loss']:.6f}")
@@ -266,6 +277,7 @@ async def run_baseline_comparison():
     
     # Save comparison results
     comparison = {
+        'model_path': str(model_path),
         'gnn_test_mse': gnn_results['test_mse'],
         'gnn_test_mae': gnn_results['test_mae'],
         'gnn_best_val_loss': gnn_history['best_loss'],
@@ -280,7 +292,13 @@ async def run_baseline_comparison():
         'gnn_config': gnn_config
     }
     
-    output_path = Path('baseline_comparison.json')
+    # Determine output path
+    if output_dir:
+        output_path = Path(output_dir) / 'baseline_comparison.json'
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        output_path = Path('baseline_comparison.json')
+    
     with open(output_path, 'w') as f:
         json.dump(comparison, f, indent=2)
     
@@ -290,5 +308,13 @@ async def run_baseline_comparison():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Compare GNN model with Linear Regression baseline')
+    parser.add_argument('--model-path', type=str, default='exp3/run_001',
+                        help='Path to the directory containing model.pth and history.json (default: exp3/run_001)')
+    parser.add_argument('--output-dir', type=str, default=None,
+                        help='Directory to save comparison results (default: current directory)')
+    
+    args = parser.parse_args()
+    
     import asyncio
-    asyncio.run(run_baseline_comparison())
+    asyncio.run(run_baseline_comparison(args.model_path, args.output_dir))
