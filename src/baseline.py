@@ -137,7 +137,8 @@ def load_gnn_model(model_path, device='cpu'):
         hidden_dim=model_kwargs['hidden_dim'],
         out_dim=model_kwargs['out_dim'],
         dropout=model_kwargs['dropout'],
-        embed_l2_reg=model_kwargs['embed_l2_reg']
+        embed_l2_reg=model_kwargs['embed_l2_reg'],
+        normalize_embeddings=model_kwargs['normalize_embeddings']
     ).to(device)
     
     # Load trained weights
@@ -174,22 +175,23 @@ def evaluate_gnn_on_test(model, GM, device='cpu'):
         for (features, edges, src_idx_train, trgt_idx_train,
              src_idx_test, trgt_idx_test, pct_tensor) in GM.load_dataset(device=device):
             
-            # Get embeddings
-            embeddings = model(features, edges)
+            # Test predictions - pass all required arguments to forward
+            y_hat, E1, E2 = model(
+                features, 
+                edges, 
+                src_idx_test, 
+                trgt_idx_test, 
+                pct_tensor
+            )
             
-            # Test predictions
-            src_embeds = embeddings[src_idx_test]
-            trgt_embeds = embeddings[trgt_idx_test]
+            # Get targets
             targets = pct_tensor[trgt_idx_test]
             
-            # Compute predictions using model's predict method
-            predictions = model.predict(src_embeds, trgt_embeds).squeeze()
-            
             # Compute loss
-            loss = torch.nn.functional.mse_loss(predictions, targets)
+            loss = torch.nn.functional.mse_loss(y_hat, targets)
             
             all_losses.append(loss.item())
-            all_predictions.extend(predictions.cpu().numpy())
+            all_predictions.extend(y_hat.cpu().numpy())
             all_targets.extend(targets.cpu().numpy())
     
     avg_test_loss = np.mean(all_losses)
