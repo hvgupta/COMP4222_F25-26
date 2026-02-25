@@ -14,7 +14,7 @@ def fetch_sp500_companies() -> pd.DataFrame:
     logger.info("Fetching S&P 500 company list from Wikipedia (async)")
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     response = requests.get(url, headers=HEADERS)
-    sp500 = pd.read_html(StringIO(response.text))[1]
+    sp500 = pd.read_html(StringIO(response.text))[0]
 
     logger.info("Successfully fetched S&P 500 company list")
     return sp500
